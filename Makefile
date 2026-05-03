@@ -1,4 +1,4 @@
-.PHONY: help up dev prod down logs ps config config-prod build build-base rebuild pull clean backup
+.PHONY: help up dev prod down logs ps config config-prod build build-base rebuild pull clean backup iris-review iris-push iris-clean
 
 BASE := compose.yaml
 DEV  := compose.override.yaml
@@ -47,3 +47,37 @@ backup:             ## dump databases and iris_data to ./backups/
 
 clean:              ## stop + remove volumes (DESTROYS data)
 	@read -p "Type DELETE to confirm volume deletion: " confirm && [ "$$confirm" = "DELETE" ] && docker compose down -v
+
+iris-review:        ## show diffs of all iris-proposed/* and iris-self/* branches vs main
+	@BRANCHES=$$(git for-each-ref --format='%(refname:short)' 'refs/heads/iris-proposed' 'refs/heads/iris-self' 2>/dev/null); \
+	if [ -z "$$BRANCHES" ]; then \
+	  echo "(no iris-proposed/* or iris-self/* branches — nothing to review)"; \
+	else \
+	  for b in $$BRANCHES; do \
+	    echo ""; echo "=== $$b ==="; \
+	    git --no-pager log --oneline main..$$b; \
+	    echo "---"; \
+	    git --no-pager diff --stat main...$$b; \
+	    echo ""; \
+	    git --no-pager diff main...$$b; \
+	  done \
+	fi
+
+iris-push:          ## push iris-proposed/* and iris-self/* branches to origin (after review)
+	@BRANCHES=$$(git for-each-ref --format='%(refname:short)' 'refs/heads/iris-proposed' 'refs/heads/iris-self' 2>/dev/null); \
+	if [ -z "$$BRANCHES" ]; then \
+	  echo "(no iris-proposed/* or iris-self/* branches to push)"; \
+	else \
+	  for b in $$BRANCHES; do \
+	    echo "→ pushing $$b ..."; \
+	    git push -u origin $$b; \
+	  done \
+	fi
+
+iris-clean:         ## delete all iris-proposed/* and iris-self/* branches locally + remote (DESTRUCTIVE)
+	@read -p "Type DELETE to nuke all iris-proposed/* and iris-self/* branches: " confirm; \
+	[ "$$confirm" = "DELETE" ] || { echo "aborted"; exit 1; }; \
+	for b in $$(git for-each-ref --format='%(refname:short)' 'refs/heads/iris-proposed' 'refs/heads/iris-self' 2>/dev/null); do \
+	  echo "→ deleting $$b (local)"; git branch -D $$b; \
+	  git push origin --delete $$b 2>/dev/null || true; \
+	done
