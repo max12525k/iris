@@ -101,11 +101,18 @@ restore_state() {
 }
 trap restore_state EXIT
 
+# If a branch by this name already exists, rename it with a timestamp + SHA
+# suffix instead of reusing it. Reusing is brittle: a stale branch may not
+# include later main-branch commits (e.g., iris-learned/ itself), so writing
+# to it fails. Renaming preserves any prior commits for review while letting
+# us start fresh from current HEAD.
 if git rev-parse --verify --quiet "$BRANCH" >/dev/null; then
-    git checkout --quiet "$BRANCH"
-else
-    git checkout --quiet -b "$BRANCH"
+    OLD_SHA=$(git rev-parse --short "$BRANCH")
+    ARCHIVE="${BRANCH}-prev-$(date -u +%Y%m%dT%H%M%SZ)-${OLD_SHA}"
+    git branch -m "$BRANCH" "$ARCHIVE"
+    echo "  (renamed pre-existing $BRANCH → $ARCHIVE so this run starts clean)"
 fi
+git checkout --quiet -b "$BRANCH"
 
 # Append to <eco>.txt (idempotent)
 MANIFEST="$LEARN_DIR/$ECO.txt"
