@@ -2287,6 +2287,115 @@ Tell the user:
 
 ---
 
+## Phase I — Optional: L3 self-modification (Iris evolves itself)
+
+**Goal:** Give Iris read+write access to its own repo so it can edit its persona, rules, skills, and aux config based on what's working and what isn't. Push to `main` stays human-only — Iris commits to `iris-proposed/*` or `iris-self/*` branches; you review, merge, push.
+
+This is opt-in. Skip if you'd rather Iris stay strictly read-only and you make all config changes by hand.
+
+### I.1 — Concept
+
+| Layer | Iris can do | Iris cannot do | Enforcement |
+|---|---|---|---|
+| Read | Anything in `/repo` (entire repo source) | — | none — read is fine |
+| Write (safe paths) | Edit files in `/repo/iris/iris-config/`, `/repo/claude-cli/iris-config/` | Edit Dockerfiles, compose, scripts, hooks, env files, `litellm/config.yaml` | `commit-msg` hook blocks `iris-self:` / `iris-proposed:` commits touching protected paths |
+| Commit | On `iris-self/*` or `iris-proposed/*` branches with `iris-self:` or `iris-proposed:` prefix | Commit to `main`; commit without iris prefix; commit on any other branch | `commit-msg` hook checks branch name against prefix |
+| Push | — | Push anywhere (no GitHub credentials in container) | Container has no GH token; `gh auth` is host-only |
+
+The `pre-commit` hook also runs on every commit (regardless of author) and blocks:
+- Common API key shapes (AWS, GitHub, Stripe, Anthropic, OpenRouter, Google, Slack, JWTs, private keys)
+- DB URIs with embedded credentials
+- Personal email addresses (gmail/yahoo/outlook/icloud)
+- Absolute `/Users/<name>` paths
+
+### I.2 — Install the hooks
+
+`.git/hooks/` is per-clone (gitignored by git itself), so this needs to run once after cloning:
+
+```bash
+cd ~/iris
+bash scripts/install-iris-hooks.sh
+```
+
+Output should confirm two symlinks created:
+```
+pre-commit -> scripts/iris-pre-commit-guard.sh    (content scan: secrets, PII)
+commit-msg -> scripts/iris-commit-msg-guard.sh    (iris-* branch + protected-path policy)
+```
+
+### I.3 — Verify the bind mount + git identity
+
+The bind mount and git identity are already wired in `iris/compose.yaml` (added in Phase B.2). Check that iris-gateway sees it correctly:
+
+```bash
+docker compose exec -T iris-gateway sh -c '
+ls /repo | head -5                     # expect: INSTALL.md, README.md, claude-cli/, ...
+git -C /repo rev-parse --abbrev-ref HEAD  # expect: main
+git -C /repo config user.name           # expect: iris-bot
+git -C /repo config user.email          # expect: iris-bot@local
+'
+```
+
+If the names are wrong, override via `IRIS_BOT_NAME` / `IRIS_BOT_EMAIL` env vars in `.env` and `docker compose up -d iris-gateway --force-recreate`. Default is `iris-bot <iris-bot@local>`.
+
+### I.4 — Verify guardrails actually block
+
+Quick smoke test that the `commit-msg` guard rejects an `iris-self:` commit on `main`:
+
+```bash
+git checkout -b __test-guard
+echo test > iris/iris-config/test.tmp
+git add iris/iris-config/test.tmp
+git checkout main
+git checkout __test-guard
+git branch -m __test-guard not-iris-branch
+git commit -m "iris-self: test policy" 2>&1 | head -3
+# Expected: "✗ iris-authored commit on 'not-iris-branch' — must be on iris-proposed/* or iris-self/*"
+
+# cleanup
+git restore --staged iris/iris-config/test.tmp
+rm iris/iris-config/test.tmp
+git checkout main
+git branch -D not-iris-branch
+```
+
+### I.5 — Daily workflow once Iris uses it
+
+When Iris makes a self-edit (it'll tell you the branch name, e.g., `iris-self/tighten-soul-tone`):
+
+```bash
+cd ~/iris
+
+# See all of Iris's pending proposals (commits, diff stat, full diff)
+make iris-review
+
+# Push them all to GitHub (after eyeball approval)
+make iris-push
+
+# Then merge from GitHub UI (or locally):
+git checkout main && git merge iris-self/tighten-soul-tone && git push
+
+# Reject and discard:
+git branch -D iris-self/tighten-soul-tone
+
+# Nuclear: delete ALL iris-* branches local + remote (after typing DELETE)
+make iris-clean
+```
+
+### I.6 — Re-applying changes Iris made
+
+Some changes Iris commits to `iris-config/` files take effect immediately on next session start (CLAUDE.md, rules, agents read fresh). Others need a `mint-iris-key.sh` re-render (anything in `iris/iris-config/config.template.yaml` or `iris/iris-config/SOUL.md`):
+
+```bash
+bash scripts/mint-iris-key.sh
+```
+
+That re-renders the config template with the live virtual key + pushes the new SOUL.md into the running iris-gateway. Reload happens at next conversation turn.
+
+**STOP. Phase I is optional but valuable. Confirm or skip.**
+
+---
+
 ## Failure recovery
 
 If something breaks irreparably during install:

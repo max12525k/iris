@@ -147,6 +147,24 @@ LiteLLM dashboard at http://127.0.0.1:4000/ui (login with `LITELLM_MASTER_KEY` f
 
 Honest scope: the Claude Code sidecar can read arbitrary files in `/workspace`, and the public Claude Code hook API doesn't permit content masking before Anthropic sees it. Workspace hygiene is the primary defense — don't put secrets in `~/iris-workspace`.
 
+## Letting Iris evolve itself (optional)
+
+Iris has read+write access to her own repo at `/repo` inside the container, and can commit changes to `iris-self/*` or `iris-proposed/*` branches with auto-enforced guardrails (no secrets, no personal data, no touching infra files, no push). To enable this, install the pre-commit + commit-msg hooks once after cloning:
+
+```bash
+bash scripts/install-iris-hooks.sh
+```
+
+Then your daily workflow when Iris proposes changes:
+
+```bash
+make iris-review     # see all pending iris-self/* and iris-proposed/* branches with diffs
+make iris-push       # publish them to GitHub for review (you merge via PR)
+make iris-clean      # destructive: delete all iris-* branches (after typing DELETE)
+```
+
+Push to `main` stays human-only. Full setup walkthrough in [INSTALL.md Phase I](INSTALL.md).
+
 ## Customizing Claude Code sidecar config
 
 The container's Claude Code config (CLAUDE.md, rules, agents, skills, settings.json with hooks pre-wired) lives in `claude-cli/iris-config/` and is **baked into the image at build time**. To add your own:
