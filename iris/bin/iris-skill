@@ -75,8 +75,12 @@ case "$ACTION" in
         # caution prompts when the caller explicitly opts in.
         OUT=$(printf 'y\n' | "$HERMES" skills install $FORCE_FLAG "$NAME" 2>&1)
         printf '%s\n' "$OUT"
-        if printf '%s' "$OUT" | grep -q "Installation cancelled"; then
-            echo "iris-skill: install of '$NAME' was cancelled by hermes — aborting" >&2
+        # Hermes can fail in (at least) two distinct ways while still exiting 0:
+        #   "Installation cancelled."          — interactive prompt defaulted to N
+        #   "Error: No skill named ... found"  — registry lookup failed
+        # Treat both as wrapper-level failures so we don't commit a no-op branch.
+        if printf '%s' "$OUT" | grep -qE "Installation cancelled|^Error: "; then
+            echo "iris-skill: install of '$NAME' failed — aborting" >&2
             exit 1
         fi
         ;;
