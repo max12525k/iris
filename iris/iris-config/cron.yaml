@@ -18,4 +18,29 @@
 #   skills:   optional list of skill names attached to this job
 #   workdir:  optional absolute path to use as cwd (loads AGENTS.md/CLAUDE.md)
 
-jobs: []
+jobs:
+  # V2 Plane 3 — Hermes Curator review pass. Hermes ships a curator that
+  # archives stale (30d unused) and old (90d unused) user-authored skills,
+  # consolidates overlapping ones, and patches underperforming ones. Without
+  # a schedule it never fires. We invoke it via a thin LLM prompt so the
+  # run + outcome land in the event log alongside everything else.
+  - name: nightly-curator
+    schedule: 0 3 * * *
+    prompt: |
+      Run 'hermes curator run' via your terminal tool to perform the
+      nightly skill review pass. After it completes, summarize in 2-3
+      bullets: which skills were archived, consolidated, or patched.
+      If no actions were taken, say "no changes". Report only that
+      summary.
+    deliver: local
+
+  # V2 Plane 1 — daily lessons render. The boot-time render only fires on
+  # container start; running this nightly catches lessons recorded during
+  # long-running gateway sessions and keeps the iris-lessons skill fresh.
+  - name: nightly-lessons-render
+    schedule: 0 4 * * *
+    prompt: |
+      Run 'iris-lessons-render' via your terminal tool to refresh the
+      iris-lessons skill from /opt/data/iris-lessons.jsonl. Report the
+      count of lessons rendered (one line).
+    deliver: local

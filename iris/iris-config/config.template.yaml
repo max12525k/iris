@@ -34,8 +34,27 @@ reasoning_effort: low
 # with one line: "A skills catalog is available — call list_skills() when you
 # think a specialized skill might help." Saves ~2K tokens × every call.
 # (Reference: upstream issue #2045)
+#
+# V2 Plane 3 — periodic creation nudge. Every 15 tool-call iterations,
+# Hermes prompts Iris to consider whether the just-completed work should
+# become a reusable skill. Combined with the iris-lessons skill (auto-
+# rendered from /opt/data/iris-lessons.jsonl), this drives autonomous
+# capability growth without explicit `iris-skill install` invocations.
 skills:
   loading: lazy
+  creation_nudge_interval: 15
+
+# V2 Plane 3 — Hermes-native memory nudge. Every 10 user turns the agent is
+# prompted to consider whether anything from the conversation is worth
+# persisting. Honcho dialectic memory (running in honcho-api) is the backing
+# store; the nudge ensures the agent uses it.
+memory:
+  memory_enabled: true
+  user_profile_enabled: true
+  memory_char_limit: 2200
+  user_char_limit: 1375
+  nudge_interval: 10        # nudge to save memory every N user turns
+  flush_min_turns: 6        # save before context is lost on /reset / compression / exit
 
 # Anthropic-style prompt caching, applied across LiteLLM (which forwards
 # cache_control markers to upstream Anthropic via OpenRouter).

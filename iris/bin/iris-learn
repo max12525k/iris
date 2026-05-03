@@ -80,6 +80,9 @@ esac
 if [ "$INSTALL_RC" -ne 0 ]; then
     _otel_emit --category package --action install --subject "$ECO:$PKG" \
                --outcome error --attr eco="$ECO" --attr exit_code="$INSTALL_RC" 2>/dev/null || true
+    _record_lesson --category package --subject "$ECO:$PKG" \
+                     --error-class "install_failed" \
+                     --lesson "Package $ECO:$PKG failed to install (exit $INSTALL_RC). Verify the name is spelled correctly and exists in the $ECO registry before trying again. For python packages, 'uv pip search <name>' or pypi.org are useful; for apt, 'apt-cache search'." 2>/dev/null || true
     exit "$INSTALL_RC"
 fi
 

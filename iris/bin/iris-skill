@@ -84,8 +84,21 @@ case "$ACTION" in
         # Treat both as wrapper-level failures so we don't commit a no-op branch.
         if printf '%s' "$OUT" | grep -qE "Installation cancelled|^Error: "; then
             echo "iris-skill: install of '$NAME' failed — aborting" >&2
+            # Identify the specific error class so the lesson is precise.
+            ERR_CLASS="install_aborted"
+            LESSON_HEAD="Skill '$NAME' could not be installed via 'iris-skill install'"
+            LESSON_TAIL="check the spelling, run 'hermes skills search <keyword>' to find the right name, and remember it may already be a builtin (look in 'hermes skills list' first)"
+            if printf '%s' "$OUT" | grep -q "^Error: No skill named"; then
+                ERR_CLASS="not_in_registry"
+                LESSON_HEAD="Skill '$NAME' was NOT FOUND in any source.skills.sh / clawhub / GitHub registries"
+            elif printf '%s' "$OUT" | grep -q "Installation cancelled"; then
+                ERR_CLASS="cancelled_at_prompt"
+            fi
             _otel_emit --category skill --action install --subject "$NAME" \
-                       --outcome error --attr error_class=hermes_install_aborted 2>/dev/null || true
+                       --outcome error --attr error_class="$ERR_CLASS" 2>/dev/null || true
+            _record_lesson --category skill --subject "$NAME" \
+                             --error-class "$ERR_CLASS" \
+                             --lesson "$LESSON_HEAD. Next time: $LESSON_TAIL." 2>/dev/null || true
             exit 1
         fi
         ;;

@@ -129,6 +129,16 @@ sys.exit(0 if (d.get('skills') or []) else 1)
               || echo "iris-reconcile: WARNING — mcp reconcile had issues; check /repo/iris/iris-config/mcp.yaml" >&2
         fi
     fi
+
+    # ─── V2 Plane 3 — render lessons into a Hermes user-message skill ───────
+    # /opt/data/iris-lessons.jsonl accumulates structured lessons from wrapper
+    # failures (via _record_lesson). Re-render on every boot so Iris picks up
+    # everything she's learned across sessions — without exploding the prompt
+    # cache (skill markdown is injected as user message, not system prompt).
+    if [ -x /usr/local/bin/iris-lessons-render ]; then
+        gosu hermes /usr/local/bin/iris-lessons-render \
+          || echo "iris-reconcile: WARNING — lessons render had issues; lessons may be missing from context" >&2
+    fi
 fi
 
 exec /opt/hermes/docker/entrypoint.sh "$@"
