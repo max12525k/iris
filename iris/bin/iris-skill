@@ -68,11 +68,22 @@ done
 case "$ACTION" in
     install)
         echo "→ installing skill '$NAME' via hermes"
-        "$HERMES" skills install $FORCE_FLAG "$NAME"
+        # `hermes skills install` has an interactive "Confirm [y/N]:" prompt
+        # that defaults to N. Without input, the install silently cancels but
+        # exits 0 — the wrapper would report success against an empty install.
+        # Pipe "y" to auto-accept; --force layered on top skips security-
+        # caution prompts when the caller explicitly opts in.
+        OUT=$(printf 'y\n' | "$HERMES" skills install $FORCE_FLAG "$NAME" 2>&1)
+        printf '%s\n' "$OUT"
+        if printf '%s' "$OUT" | grep -q "Installation cancelled"; then
+            echo "iris-skill: install of '$NAME' was cancelled by hermes — aborting" >&2
+            exit 1
+        fi
         ;;
     uninstall)
         echo "→ uninstalling skill '$NAME' via hermes"
-        "$HERMES" skills uninstall "$NAME"
+        # `hermes skills uninstall` prompts "Remove [Y/n]:" — auto-accept too.
+        printf 'y\n' | "$HERMES" skills uninstall "$NAME"
         ;;
 esac
 
