@@ -13,6 +13,11 @@ services:
       - data:/opt/data
       - ${HOME}/iris-workspace:/workspace
       - /var/run/docker.sock:/var/run/docker.sock:ro
+      # Self-modification (L3): Iris reads + writes the repo source. Pre-commit
+      # guard (scripts/iris-pre-commit-guard.sh) blocks secrets / personal data /
+      # iris-authored commits on main or touching protected paths. Iris commits
+      # to iris-proposed/* branches; user reviews + pushes via PR.
+      - ${IRIS_REPO:-${HOME}/personal_assistant/iris}:/repo:rw
     environment:
       HERMES_UID: ${HERMES_UID:-10000}
       HERMES_GID: ${HERMES_GID:-10000}
@@ -27,6 +32,9 @@ services:
       DISCORD_BOT_TOKEN: ${DISCORD_BOT_TOKEN:-}
       DISCORD_ALLOWED_USERS: ${DISCORD_ALLOWED_USERS:-}
       DISCORD_HOME_CHANNEL: ${DISCORD_HOME_CHANNEL:-}
+      # Iris bot git identity (used when Iris commits to iris-proposed/* branches)
+      IRIS_BOT_NAME: ${IRIS_BOT_NAME:-iris-bot}
+      IRIS_BOT_EMAIL: ${IRIS_BOT_EMAIL:-iris-bot@local}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     networks:

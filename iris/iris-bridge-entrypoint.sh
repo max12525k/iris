@@ -8,6 +8,16 @@ set -e
 
 if [ "$(id -u)" = "0" ]; then
     chown -R "${HERMES_UID:-10000}:${HERMES_GID:-10000}" /opt/hermes/ui-tui 2>/dev/null || true
+
+    # Configure git identity for iris-authored commits on iris-proposed/* branches.
+    # /repo is bind-mounted from host; the .git there is the user's repo, so we
+    # set safe.directory + identity at the system level so any user inside the
+    # container can run git operations on /repo.
+    if [ -d /repo/.git ]; then
+        git config --system --add safe.directory /repo 2>/dev/null || true
+        git config --system user.name  "${IRIS_BOT_NAME:-iris-bot}" 2>/dev/null || true
+        git config --system user.email "${IRIS_BOT_EMAIL:-iris-bot@local}" 2>/dev/null || true
+    fi
 fi
 
 exec /opt/hermes/docker/entrypoint.sh "$@"
