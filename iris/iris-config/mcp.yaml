@@ -1,0 +1,19 @@
+# Iris-managed MCP server connections.
+#
+# Each entry here is replayed into Hermes's config (`hermes mcp add ...`) at
+# every boot so the server set survives force-recreate AND fresh-clone.
+#
+# Add via:    iris-mcp add <name> [--url URL | --command CMD --args ARG...] [opts]
+# Remove via: iris-mcp rm <name>
+# Inspect:    iris-mcp list   (or `hermes mcp list` for raw view)
+#
+# Schema for each server (one of url OR command is required):
+#   name:    local identifier (used as config key)
+#   url:     HTTP/SSE endpoint URL (for remote MCP servers)
+#   command: stdio command (e.g. "npx") — for local-process servers
+#   args:    list of arguments for the stdio command
+#   auth:    optional — "oauth" or "header"
+#   preset:  optional — known MCP preset name (Hermes ships some presets)
+#   env:     optional — list of "KEY=VALUE" env-var strings for stdio servers
+
+servers: []

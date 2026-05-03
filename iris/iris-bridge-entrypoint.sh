@@ -79,6 +79,7 @@ if [ "$(id -u)" = "0" ]; then
     NEED_HERMES_RUNTIME=false
     [ -x /usr/local/bin/iris-cron-reconcile ] && [ -f /repo/iris/iris-config/cron.yaml ] && NEED_HERMES_RUNTIME=true
     [ -f /repo/iris/iris-config/skills.json ] && NEED_HERMES_RUNTIME=true
+    [ -x /usr/local/bin/iris-mcp-reconcile ] && [ -f /repo/iris/iris-config/mcp.yaml ] && NEED_HERMES_RUNTIME=true
 
     if [ "$NEED_HERMES_RUNTIME" = true ]; then
         # Mirror upstream's UID/GID + /opt/data chown so subsequent gosu calls
@@ -112,6 +113,14 @@ sys.exit(0 if (d.get('skills') or []) else 1)
                     /repo/iris/iris-config/skills.json --force \
                   || echo "iris-reconcile: WARNING — skills reconcile had issues; check /repo/iris/iris-config/skills.json" >&2
             fi
+        fi
+
+        # MCP reconcile: replay each manifest entry via `hermes mcp add` with
+        # auto-accepted prompts. Idempotent — overwrites existing entries with
+        # the same name. Skipped when the manifest has no servers.
+        if [ -x /usr/local/bin/iris-mcp-reconcile ] && [ -f /repo/iris/iris-config/mcp.yaml ]; then
+            gosu hermes /usr/local/bin/iris-mcp-reconcile /repo/iris/iris-config/mcp.yaml \
+              || echo "iris-reconcile: WARNING — mcp reconcile had issues; check /repo/iris/iris-config/mcp.yaml" >&2
         fi
     fi
 fi

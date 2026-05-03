@@ -27,11 +27,14 @@ COPY bin/iris-learn /usr/local/bin/iris-learn
 COPY bin/iris-cron /usr/local/bin/iris-cron
 COPY bin/iris-cron-reconcile.py /usr/local/bin/iris-cron-reconcile
 COPY bin/iris-skill /usr/local/bin/iris-skill
+COPY bin/iris-mcp /usr/local/bin/iris-mcp
+COPY bin/iris-mcp-reconcile.py /usr/local/bin/iris-mcp-reconcile
 RUN mkdir -p /opt/iris-hooks
 COPY hooks/pre_tool_call.sh /opt/iris-hooks/pre_tool_call.sh
 RUN chmod +x /usr/local/bin/presidio-mask /usr/local/bin/claude \
               /usr/local/bin/iris-learn /usr/local/bin/iris-cron \
               /usr/local/bin/iris-cron-reconcile /usr/local/bin/iris-skill \
+              /usr/local/bin/iris-mcp /usr/local/bin/iris-mcp-reconcile \
               /opt/iris-hooks/pre_tool_call.sh
 
 # ─── Bake learned packages into the image ──────────────────────────────────

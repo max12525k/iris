@@ -1,0 +1,219 @@
+#!/usr/bin/env bash
+# iris-mcp — atomically connect/disconnect an MCP server AND record it in
+# iris/iris-config/mcp.yaml so the connection survives recreate + fresh-clone.
+#
+# Usage:
+#   iris-mcp add <name> --url <URL> [--auth oauth|header] [--env KEY=VAL...]
+#   iris-mcp add <name> --command <cmd> [--args ARG...] [--env KEY=VAL...]
+#   iris-mcp add <name> --preset <preset>
+#   iris-mcp rm <name>
+#   iris-mcp list
+#
+# Examples:
+#   iris-mcp add github --url https://api.githubcopilot.com/mcp/ --auth oauth
+#   iris-mcp add fs     --command npx --args -y @modelcontextprotocol/server-filesystem /workspace
+
+set -euo pipefail
+
+REPO="${IRIS_REPO_ROOT:-/repo}"
+MANIFEST="$REPO/iris/iris-config/mcp.yaml"
+HERMES=/opt/hermes/.venv/bin/hermes
+RECONCILE=/usr/local/bin/iris-mcp-reconcile
+
+if [ ! -f "$MANIFEST" ]; then
+    echo "iris-mcp: manifest missing at $MANIFEST" >&2
+    exit 1
+fi
+
+usage() {
+    cat >&2 <<'EOF'
+usage:
+  iris-mcp add <name> --url <URL>      [--auth oauth|header] [--env KEY=VAL ...]
+  iris-mcp add <name> --command <cmd>  [--args ARG ...] [--env KEY=VAL ...]
+  iris-mcp add <name> --preset <name>
+  iris-mcp rm <name>
+  iris-mcp list
+EOF
+    exit 64
+}
+
+ACTION="${1:-}"
+shift || true
+
+case "$ACTION" in
+    list)        exec "$HERMES" mcp list ;;
+    add|rm) ;;
+    "" | -h | --help) usage ;;
+    *) echo "iris-mcp: unknown action '$ACTION'" >&2; usage ;;
+esac
+
+NAME="${1:-}"
+[ -z "$NAME" ] && { echo "iris-mcp $ACTION: <name> required" >&2; usage; }
+shift || true
+
+URL=""
+COMMAND=""
+AUTH=""
+PRESET=""
+ARGS=()
+ENVS=()
+
+if [ "$ACTION" = "add" ]; then
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --url)     URL="${2:-}"; shift 2;;
+            --command) COMMAND="${2:-}"; shift 2;;
+            --auth)    AUTH="${2:-}"; shift 2;;
+            --preset)  PRESET="${2:-}"; shift 2;;
+            --args)
+                shift
+                while [ $# -gt 0 ] && [[ "$1" != --* ]]; do
+                    ARGS+=("$1"); shift
+                done
+                ;;
+            --env)
+                shift
+                while [ $# -gt 0 ] && [[ "$1" != --* ]]; do
+                    ENVS+=("$1"); shift
+                done
+                ;;
+            *) echo "iris-mcp add: unknown flag '$1'" >&2; usage;;
+        esac
+    done
+    if [ -z "$URL" ] && [ -z "$COMMAND" ] && [ -z "$PRESET" ]; then
+        echo "iris-mcp add: one of --url, --command, or --preset is required" >&2
+        usage
+    fi
+fi
+
+# ─── Stash dance + branch switch BEFORE manifest write ──────────────────────
+
+cd "$REPO"
+
+ORIG_BRANCH=$(git rev-parse --abbrev-ref HEAD)
+STASH_REF=""
+if [ -n "$(git status --porcelain)" ]; then
+    STASH_MSG="iris-mcp-prestash-$(date -u +%Y%m%dT%H%M%SZ)"
+    git stash push --include-untracked --quiet -m "$STASH_MSG"
+    STASH_REF="$STASH_MSG"
+fi
+
+SAFE_NAME=$(printf '%s' "$NAME" | tr -cd 'a-zA-Z0-9.-')
+BRANCH="iris-self/mcp-${ACTION}-${SAFE_NAME}"
+
+restore_state() {
+    git checkout --quiet "$ORIG_BRANCH" 2>/dev/null || true
+    if [ -n "$STASH_REF" ]; then
+        git stash pop --quiet || echo "iris-mcp: WARNING — could not pop stash '$STASH_REF', recover with 'git stash list'" >&2
+    fi
+}
+trap restore_state EXIT
+
+if git rev-parse --verify --quiet "$BRANCH" >/dev/null; then
+    OLD_SHA=$(git rev-parse --short "$BRANCH")
+    ARCHIVE="${BRANCH}-prev-$(date -u +%Y%m%dT%H%M%SZ)-${OLD_SHA}"
+    git branch -m "$BRANCH" "$ARCHIVE"
+    echo "  (renamed pre-existing $BRANCH → $ARCHIVE so this run starts clean)"
+fi
+git checkout --quiet -b "$BRANCH"
+
+# ─── Update manifest via Python (clean YAML escaping) ───────────────────────
+
+NAME="$NAME" URL="$URL" COMMAND="$COMMAND" AUTH="$AUTH" PRESET="$PRESET" \
+ACTION="$ACTION" MANIFEST_PATH="$MANIFEST" \
+ARGS_JSON="$(printf '%s\n' "${ARGS[@]:-}" | /opt/hermes/.venv/bin/python -c 'import json,sys; print(json.dumps([a for a in sys.stdin.read().splitlines() if a]))')" \
+ENVS_JSON="$(printf '%s\n' "${ENVS[@]:-}" | /opt/hermes/.venv/bin/python -c 'import json,sys; print(json.dumps([e for e in sys.stdin.read().splitlines() if e]))')" \
+/opt/hermes/.venv/bin/python - <<'PY'
+import json, os
+import yaml
+
+path = os.environ["MANIFEST_PATH"]
+action = os.environ["ACTION"]
+name = os.environ["NAME"]
+
+with open(path) as f:
+    text = f.read()
+data = yaml.safe_load(text) or {}
+servers = data.get("servers") or []
+servers = [s for s in servers if (s or {}).get("name") != name]
+
+if action == "add":
+    entry = {"name": name}
+    if os.environ.get("URL"):     entry["url"] = os.environ["URL"]
+    if os.environ.get("COMMAND"): entry["command"] = os.environ["COMMAND"]
+    args = json.loads(os.environ.get("ARGS_JSON") or "[]")
+    if args: entry["args"] = args
+    if os.environ.get("AUTH"):    entry["auth"] = os.environ["AUTH"]
+    if os.environ.get("PRESET"):  entry["preset"] = os.environ["PRESET"]
+    envs = json.loads(os.environ.get("ENVS_JSON") or "[]")
+    if envs: entry["env"] = envs
+    servers.append(entry)
+
+data["servers"] = servers
+
+with open(path, "w") as f:
+    head = []
+    for line in text.splitlines():
+        if line.startswith("#") or not line.strip():
+            head.append(line)
+        else:
+            break
+    f.write("\n".join(head).rstrip() + "\n\n")
+    yaml.safe_dump(data, f, sort_keys=False, default_flow_style=False, width=120)
+PY
+
+# ─── Apply via reconcile (or hermes mcp rm for the rm path) ─────────────────
+
+case "$ACTION" in
+    add)
+        echo "→ adding MCP server '$NAME'"
+        if ! "$RECONCILE" "$MANIFEST"; then
+            echo "iris-mcp: reconcile failed (see stderr above)" >&2
+            exit 1
+        fi
+        ;;
+    rm)
+        echo "→ removing MCP server '$NAME'"
+        # hermes mcp remove asks "Remove server X? [Y/n]" — auto-accept.
+        if ! printf 'y\n' | "$HERMES" mcp remove "$NAME" >/dev/null 2>&1; then
+            echo "  (warning: hermes mcp remove returned non-zero — server may not have been registered)"
+        fi
+        ;;
+esac
+
+# ─── Commit on the iris-self branch ─────────────────────────────────────────
+
+git add iris/iris-config/mcp.yaml
+if git diff --cached --quiet; then
+    echo "  (nothing to commit — manifest unchanged)"
+else
+    case "$ACTION" in
+        add)
+            MSG="iris-self: add MCP server '$NAME'
+
+Recorded in iris/iris-config/mcp.yaml; reconcile will run
+'hermes mcp add $NAME ...' on every boot so the connection survives
+recreate and fresh-clone."
+            ;;
+        rm)
+            MSG="iris-self: remove MCP server '$NAME'
+
+Removed from iris/iris-config/mcp.yaml and from Hermes config."
+            ;;
+    esac
+    if git commit --quiet -m "$MSG"; then
+        echo "✓ committed on $BRANCH"
+    else
+        echo "iris-mcp: WARNING — manifest updated but commit failed; commit by hand" >&2
+        exit 1
+    fi
+fi
+
+trap - EXIT
+restore_state
+
+echo ""
+echo "✓ MCP server '$NAME' ${ACTION}ed"
+echo "  manifest: iris/iris-config/mcp.yaml"
+echo "  branch:   $BRANCH"
+echo "  review:   make iris-review"
