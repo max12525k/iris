@@ -11,6 +11,12 @@ set -e
 if [ "$(id -u)" = "0" ]; then
     chown -R "${HERMES_UID:-10000}:${HERMES_GID:-10000}" /opt/hermes/ui-tui 2>/dev/null || true
 
+    # Add hermes to the root group so it can rw /var/run/docker.sock (mounted
+    # from host with srw-rw---- root:root permissions). Needed for the
+    # claude-wrapper to `docker exec` into the claude-cli sidecar. Container-
+    # local — does not affect host's user database.
+    usermod -aG root hermes 2>/dev/null || true
+
     # Configure git identity for iris-authored commits on iris-proposed/* branches.
     # /repo is bind-mounted from host; the .git there is the user's repo, so we
     # set safe.directory + identity at the system level so any user inside the

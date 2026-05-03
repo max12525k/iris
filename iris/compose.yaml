@@ -12,7 +12,11 @@ services:
     volumes:
       - data:/opt/data
       - ${HOME}/iris-workspace:/workspace
-      - /var/run/docker.sock:/var/run/docker.sock:ro
+      # Mounted RW (not :ro) because the claude-wrapper does `docker exec`
+      # to delegate work to the claude-cli sidecar — that's a write-side API
+      # call. Hermes is added to the root group at entrypoint so the
+      # `srw-rw---- root:root` socket inside the container is reachable.
+      - /var/run/docker.sock:/var/run/docker.sock
       # Self-modification (L3): Iris reads + writes the repo source. Pre-commit
       # guard (scripts/iris-pre-commit-guard.sh) blocks secrets / personal data /
       # iris-authored commits on main or touching protected paths. Iris commits
