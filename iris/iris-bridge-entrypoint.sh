@@ -22,11 +22,11 @@ if [ "$(id -u)" = "0" ]; then
     fi
 
     # ─── Reconcile from learning manifest ───────────────────────────────────
-    # Idempotent: already-installed packages are no-ops. Catches the case where
-    # the manifest grew (Iris ran iris-learn) but the image hasn't been rebuilt
-    # yet — and the case of a fresh force-recreate where the venv has been
-    # reset to its image-baked state. Failures are warned, not fatal: Iris
-    # should still come up even if a manifest entry can't be installed.
+    # Run as root: avoids the usermod-ordering issue (upstream entrypoint
+    # remaps hermes from build-time uid 10000 → HERMES_UID later, so su to
+    # hermes here would write as the wrong uid). Idempotent: already-installed
+    # packages are fast no-ops. Failures warn but don't abort — Iris should
+    # still start even if a manifest entry can't be installed.
     LEARN_DIR=/repo/iris/iris-learned
     if [ -d "$LEARN_DIR" ]; then
         echo "iris-reconcile: replaying learning manifest from $LEARN_DIR"
@@ -41,22 +41,29 @@ if [ "$(id -u)" = "0" ]; then
         fi
 
         if [ -s "$LEARN_DIR/python.txt" ] && grep -qvE '^\s*#|^\s*$' "$LEARN_DIR/python.txt"; then
-            su - hermes -s /bin/sh -c \
-              "uv pip install --quiet --python /opt/hermes/.venv/bin/python -r '$LEARN_DIR/python.txt'" \
-              >/dev/null 2>&1 \
+            uv pip install --quiet --python /opt/hermes/.venv/bin/python -r "$LEARN_DIR/python.txt" \
               || echo "iris-reconcile: WARNING — uv pip reconcile had issues; check $LEARN_DIR/python.txt" >&2
         fi
 
         if [ -s "$LEARN_DIR/npm.txt" ] && command -v npm >/dev/null 2>&1; then
             NPM_PKGS=$(grep -vE '^\s*#|^\s*$' "$LEARN_DIR/npm.txt" | tr '\n' ' ')
             if [ -n "$NPM_PKGS" ]; then
-                su - hermes -s /bin/sh -c \
-                  "npm config set prefix \$HOME/.local --location=user >/dev/null && npm install -g --silent $NPM_PKGS" \
+                # Install to hermes's user prefix even though we're root, so
+                # global modules end up in a hermes-writable location at runtime.
+                npm install -g --prefix /home/hermes/.local --silent $NPM_PKGS \
                   >/dev/null 2>&1 \
                   || echo "iris-reconcile: WARNING — npm reconcile had issues; check $LEARN_DIR/npm.txt" >&2
             fi
         fi
     fi
+
+    # Chown the venv + npm prefix AFTER reconcile so hermes can run iris-learn
+    # at runtime without permission errors. Single-pass chown after install
+    # covers both the image-baked files and any new ones reconcile just added.
+    # ~Idempotent on warm boots.
+    chown -R "${HERMES_UID:-10000}:${HERMES_GID:-10000}" /opt/hermes/.venv 2>/dev/null || true
+    [ -d /home/hermes/.local ] && \
+      chown -R "${HERMES_UID:-10000}:${HERMES_GID:-10000}" /home/hermes/.local 2>/dev/null || true
 fi
 
 exec /opt/hermes/docker/entrypoint.sh "$@"
