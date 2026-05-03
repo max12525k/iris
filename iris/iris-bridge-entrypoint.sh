@@ -76,7 +76,14 @@ if [ "$(id -u)" = "0" ]; then
     # with correct ownership. We mirror upstream's usermod + /opt/data chown
     # ourselves (otherwise cron reconcile would write as the wrong UID) and
     # let upstream re-run the same logic harmlessly (it's idempotent).
-    if [ -x /usr/local/bin/iris-cron-reconcile ] && [ -f /repo/iris/iris-config/cron.yaml ]; then
+    NEED_HERMES_RUNTIME=false
+    [ -x /usr/local/bin/iris-cron-reconcile ] && [ -f /repo/iris/iris-config/cron.yaml ] && NEED_HERMES_RUNTIME=true
+    [ -f /repo/iris/iris-config/skills.json ] && NEED_HERMES_RUNTIME=true
+
+    if [ "$NEED_HERMES_RUNTIME" = true ]; then
+        # Mirror upstream's UID/GID + /opt/data chown so subsequent gosu calls
+        # write to /opt/data with the correct ownership. Upstream's same logic
+        # later runs harmlessly (idempotent).
         if [ -n "${HERMES_UID:-}" ] && [ "$HERMES_UID" != "$(id -u hermes)" ]; then
             usermod -u "$HERMES_UID" hermes
         fi
@@ -84,8 +91,28 @@ if [ "$(id -u)" = "0" ]; then
             groupmod -o -g "$HERMES_GID" hermes 2>/dev/null || true
         fi
         chown -R hermes:"$(id -gn hermes)" /opt/data 2>/dev/null || true
-        gosu hermes /usr/local/bin/iris-cron-reconcile /repo/iris/iris-config/cron.yaml \
-          || echo "iris-reconcile: WARNING — cron reconcile had issues; check /repo/iris/iris-config/cron.yaml" >&2
+
+        if [ -x /usr/local/bin/iris-cron-reconcile ] && [ -f /repo/iris/iris-config/cron.yaml ]; then
+            gosu hermes /usr/local/bin/iris-cron-reconcile /repo/iris/iris-config/cron.yaml \
+              || echo "iris-reconcile: WARNING — cron reconcile had issues; check /repo/iris/iris-config/cron.yaml" >&2
+        fi
+
+        # Skills reconcile: import the manifest snapshot. Hermes treats the
+        # operation as install-anything-missing (idempotent) so this is fast
+        # when nothing has changed and pulls from registries on fresh clones.
+        if [ -s /repo/iris/iris-config/skills.json ]; then
+            if /opt/hermes/.venv/bin/python -c "
+import json, sys
+with open('/repo/iris/iris-config/skills.json') as f:
+    d = json.load(f)
+sys.exit(0 if (d.get('skills') or []) else 1)
+" >/dev/null 2>&1; then
+                echo "iris-reconcile: replaying skills snapshot from /repo/iris/iris-config/skills.json"
+                gosu hermes /opt/hermes/.venv/bin/hermes skills snapshot import \
+                    /repo/iris/iris-config/skills.json --force \
+                  || echo "iris-reconcile: WARNING — skills reconcile had issues; check /repo/iris/iris-config/skills.json" >&2
+            fi
+        fi
     fi
 fi
 

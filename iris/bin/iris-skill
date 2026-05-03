@@ -1,0 +1,165 @@
+#!/usr/bin/env bash
+# iris-skill — atomically install/uninstall a Hermes skill AND record the
+# resulting snapshot in iris/iris-config/skills.json so the skill set
+# survives container recreate, image rebuild, AND fresh-clone.
+#
+# Usage:
+#   iris-skill install <name> [--force]
+#   iris-skill uninstall <name>
+#   iris-skill list
+#
+# The wrapper:
+#   1. Calls `hermes skills install/uninstall <name>` (mutates /opt/data state)
+#   2. Stash-dances onto iris-self/skill-<action>-<name>
+#   3. Re-exports the snapshot to iris/iris-config/skills.json (canonicalized
+#      — strips the volatile exported_at timestamp so commits stay clean)
+#   4. Auto-commits, then restores the user's prior branch + working tree
+#
+# Boot reconcile (in entrypoint) runs `hermes skills snapshot import` against
+# the manifest so a fresh container picks up everything Iris has learned.
+
+set -euo pipefail
+
+REPO="${IRIS_REPO_ROOT:-/repo}"
+MANIFEST="$REPO/iris/iris-config/skills.json"
+HERMES=/opt/hermes/.venv/bin/hermes
+
+if [ ! -f "$MANIFEST" ]; then
+    echo "iris-skill: manifest missing at $MANIFEST" >&2
+    exit 1
+fi
+
+usage() {
+    cat >&2 <<'EOF'
+usage:
+  iris-skill install <name> [--force]
+  iris-skill uninstall <name>
+  iris-skill list
+EOF
+    exit 64
+}
+
+ACTION="${1:-}"
+shift || true
+
+case "$ACTION" in
+    list)        exec "$HERMES" skills list ;;
+    install|uninstall) ;;
+    "" | -h | --help) usage ;;
+    *) echo "iris-skill: unknown action '$ACTION'" >&2; usage ;;
+esac
+
+NAME="${1:-}"
+[ -z "$NAME" ] && { echo "iris-skill $ACTION: <name> required" >&2; usage; }
+shift || true
+
+FORCE_FLAG=""
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --force) FORCE_FLAG="--force"; shift;;
+        *) echo "iris-skill: unknown flag '$1'" >&2; usage;;
+    esac
+done
+
+# ─── Install / uninstall via Hermes ─────────────────────────────────────────
+# Mutates /opt/data state (skills dir + internal index). We don't touch /repo
+# at all in this step, so it's safe to do before the branch switch.
+
+case "$ACTION" in
+    install)
+        echo "→ installing skill '$NAME' via hermes"
+        "$HERMES" skills install $FORCE_FLAG "$NAME"
+        ;;
+    uninstall)
+        echo "→ uninstalling skill '$NAME' via hermes"
+        "$HERMES" skills uninstall "$NAME"
+        ;;
+esac
+
+# ─── Stash dance + branch switch BEFORE manifest write ──────────────────────
+
+cd "$REPO"
+
+ORIG_BRANCH=$(git rev-parse --abbrev-ref HEAD)
+STASH_REF=""
+if [ -n "$(git status --porcelain)" ]; then
+    STASH_MSG="iris-skill-prestash-$(date -u +%Y%m%dT%H%M%SZ)"
+    git stash push --include-untracked --quiet -m "$STASH_MSG"
+    STASH_REF="$STASH_MSG"
+fi
+
+SAFE_NAME=$(printf '%s' "$NAME" | tr -cd 'a-zA-Z0-9.-')
+BRANCH="iris-self/skill-${ACTION}-${SAFE_NAME}"
+
+restore_state() {
+    git checkout --quiet "$ORIG_BRANCH" 2>/dev/null || true
+    if [ -n "$STASH_REF" ]; then
+        git stash pop --quiet || echo "iris-skill: WARNING — could not pop stash '$STASH_REF', recover with 'git stash list'" >&2
+    fi
+}
+trap restore_state EXIT
+
+if git rev-parse --verify --quiet "$BRANCH" >/dev/null; then
+    OLD_SHA=$(git rev-parse --short "$BRANCH")
+    ARCHIVE="${BRANCH}-prev-$(date -u +%Y%m%dT%H%M%SZ)-${OLD_SHA}"
+    git branch -m "$BRANCH" "$ARCHIVE"
+    echo "  (renamed pre-existing $BRANCH → $ARCHIVE so this run starts clean)"
+fi
+git checkout --quiet -b "$BRANCH"
+
+# ─── Export snapshot, canonicalize, write manifest ──────────────────────────
+# Hermes's snapshot includes a volatile exported_at timestamp. We strip it so
+# repeated exports of the same logical state produce identical files (no diff
+# noise). The hermes_version field is also dropped — it's not meaningful for
+# import (Hermes ignores it) and it changes when the image upgrades.
+
+TMP_SNAPSHOT=$(mktemp)
+"$HERMES" skills snapshot export "$TMP_SNAPSHOT" >/dev/null
+
+MANIFEST_PATH="$MANIFEST" SNAPSHOT_PATH="$TMP_SNAPSHOT" \
+/opt/hermes/.venv/bin/python - <<'PY'
+import json, os
+with open(os.environ["SNAPSHOT_PATH"]) as f:
+    data = json.load(f)
+canonical = {
+    "skills": sorted(data.get("skills") or [], key=lambda s: s.get("name") or s.get("id") or ""),
+    "taps":   sorted(data.get("taps") or [],   key=lambda t: t.get("name") or t.get("url") or ""),
+}
+with open(os.environ["MANIFEST_PATH"], "w") as f:
+    json.dump(canonical, f, indent=2, sort_keys=False)
+    f.write("\n")
+PY
+rm -f "$TMP_SNAPSHOT"
+
+# ─── Commit on the iris-self branch ─────────────────────────────────────────
+
+git add iris/iris-config/skills.json
+if git diff --cached --quiet; then
+    echo "  (nothing to commit — manifest unchanged)"
+else
+    case "$ACTION" in
+        install)   MSG="iris-self: install skill '$NAME'
+
+Recorded in iris/iris-config/skills.json so a fresh-clone pickup
+via 'hermes skills snapshot import' will reinstall it." ;;
+        uninstall) MSG="iris-self: uninstall skill '$NAME'
+
+Removed from iris/iris-config/skills.json; on next reconcile / fresh
+boot the skill will not be reinstalled." ;;
+    esac
+    if git commit --quiet -m "$MSG"; then
+        echo "✓ committed on $BRANCH"
+    else
+        echo "iris-skill: WARNING — manifest updated but commit failed; commit by hand" >&2
+        exit 1
+    fi
+fi
+
+trap - EXIT
+restore_state
+
+echo ""
+echo "✓ skill '$NAME' ${ACTION}ed"
+echo "  manifest: iris/iris-config/skills.json"
+echo "  branch:   $BRANCH"
+echo "  review:   make iris-review"
