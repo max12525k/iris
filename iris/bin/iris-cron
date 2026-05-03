@@ -189,19 +189,26 @@ if git diff --cached --quiet; then
     echo "  (nothing to commit — manifest unchanged)"
 else
     case "$ACTION" in
-        add) MSG="iris-self: schedule cron job '$NAME'
+        add)
+            MSG="iris-self: schedule cron job '$NAME'
 
 Schedule: $SCHEDULE
-Prompt:   $PROMPT$([ -n "$DELIVER" ] && echo "
-Deliver:  $DELIVER")$([ ${#SKILLS[@]} -gt 0 ] && echo "
-Skills:   ${SKILLS[*]}")
+Prompt:   $PROMPT"
+            [ -n "$DELIVER" ] && MSG="$MSG
+Deliver:  $DELIVER" || true
+            [ "${#SKILLS[@]}" -gt 0 ] && MSG="$MSG
+Skills:   ${SKILLS[*]}" || true
+            MSG="$MSG
 
 Reconciled into Hermes via iris-cron-reconcile and recorded in
-iris/iris-config/cron.yaml so the schedule survives recreate/rebuild.";;
-        rm) MSG="iris-self: remove cron job '$NAME'
+iris/iris-config/cron.yaml so the schedule survives recreate/rebuild."
+            ;;
+        rm)
+            MSG="iris-self: remove cron job '$NAME'
 
 Removed from iris/iris-config/cron.yaml; reconcile will drop the
-matching iris.$NAME entry from Hermes on next boot.";;
+matching iris.$NAME entry from Hermes on next boot."
+            ;;
     esac
     if git commit --quiet -m "$MSG"; then
         echo "✓ committed on $BRANCH"
