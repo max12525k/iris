@@ -18,6 +18,15 @@ services:
       HERMES_GID: ${HERMES_GID:-10000}
       PRESIDIO_ANALYZER_API_BASE: http://presidio-analyzer:3000
       PRESIDIO_ANONYMIZER_API_BASE: http://presidio-anonymizer:3000
+      # Messaging adapters — Hermes auto-starts the bot if BOT_TOKEN is set.
+      # ALLOWED_USERS gates who can talk to it. Defaults to empty so bots
+      # don't start unless you've configured them in .env.
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      TELEGRAM_ALLOWED_USERS: ${TELEGRAM_ALLOWED_USERS:-}
+      TELEGRAM_HOME_CHANNEL: ${TELEGRAM_HOME_CHANNEL:-}
+      DISCORD_BOT_TOKEN: ${DISCORD_BOT_TOKEN:-}
+      DISCORD_ALLOWED_USERS: ${DISCORD_ALLOWED_USERS:-}
+      DISCORD_HOME_CHANNEL: ${DISCORD_HOME_CHANNEL:-}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     networks:
@@ -26,7 +35,9 @@ services:
     command: ["gateway", "run"]
 
   iris-dashboard:
-    image: iris:local
+    # Same bridge image as iris-gateway — adds chown of /opt/hermes/ui-tui so
+    # the dashboard's runtime `npm install` for the --tui Chat tab succeeds.
+    image: iris-bridge:local
     container_name: iris-dashboard
     restart: unless-stopped
     depends_on:
@@ -44,4 +55,6 @@ services:
       - "127.0.0.1:9119:9119"
     # --insecure is required because we bind to 0.0.0.0 inside the container.
     # Safe here: compose publishes port 9119 only to host 127.0.0.1, not 0.0.0.0.
-    command: ["dashboard", "--host", "0.0.0.0", "--no-open", "--insecure"]
+    # --tui exposes the in-browser Chat tab (embedded `hermes --tui` over PTY/WebSocket).
+    # Without it, the dashboard is sessions/config/skills only — no chat surface.
+    command: ["dashboard", "--host", "0.0.0.0", "--no-open", "--insecure", "--tui"]

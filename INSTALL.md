@@ -285,7 +285,9 @@ services:
       - "127.0.0.1:9119:9119"
     # --insecure is required because we bind to 0.0.0.0 inside the container.
     # Safe here: compose publishes port 9119 only to host 127.0.0.1, not 0.0.0.0.
-    command: ["dashboard", "--host", "0.0.0.0", "--no-open", "--insecure"]
+    # --tui exposes the in-browser Chat tab (embedded `hermes --tui` over PTY/WebSocket).
+    # Without it, the dashboard is sessions/config/skills only — no chat surface.
+    command: ["dashboard", "--host", "0.0.0.0", "--no-open", "--insecure", "--tui"]
 ```
 
 ### B.3 — `litellm/compose.yaml`
@@ -1862,7 +1864,7 @@ COPY --chown=claude:claude presidio-mask.py /usr/local/bin/presidio-mask
 RUN chmod +x /usr/local/bin/presidio-mask
 ```
 
-For iris-gateway, the `iris:local` upstream image is built from a clone we don't control. Create a thin extending Dockerfile `iris/Dockerfile.iris-bridge`:
+For iris-gateway and iris-dashboard, the `iris:local` upstream image is built from a clone we don't control. Create a thin extending Dockerfile `iris/Dockerfile.iris-bridge`:
 
 ```dockerfile
 FROM iris:local
@@ -1872,15 +1874,43 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       python3-requests docker.io ca-certificates \
   && rm -rf /var/lib/apt/lists/*
 
+# The dashboard's --tui flag does runtime `npm install` in /opt/hermes/ui-tui.
+# Upstream entrypoint remaps hermes UID/GID at runtime (build-default 10000 →
+# HERMES_UID at start), but doesn't re-chown /opt/hermes/ui-tui — leaving it
+# owned by the build-time UID. Our wrapper entrypoint chowns at runtime AFTER
+# UID remap but BEFORE privilege drop. Without this, npm install fails EACCES.
+COPY iris-bridge-entrypoint.sh /usr/local/bin/iris-bridge-entrypoint
+RUN chmod +x /usr/local/bin/iris-bridge-entrypoint
+
 COPY presidio-mask.py /usr/local/bin/presidio-mask
 COPY claude-wrapper.sh /usr/local/bin/claude
+RUN mkdir -p /opt/iris-hooks
 COPY hooks/pre_tool_call.sh /opt/iris-hooks/pre_tool_call.sh
 RUN chmod +x /usr/local/bin/presidio-mask /usr/local/bin/claude /opt/iris-hooks/pre_tool_call.sh
 
-USER hermes
+# Don't switch USER — wrapper entrypoint expects to start as root to chown ui-tui
+# + /opt/data, then upstream entrypoint drops privileges to `hermes` itself.
+ENTRYPOINT ["/usr/bin/tini", "-g", "--", "/usr/local/bin/iris-bridge-entrypoint"]
 ```
 
-In `iris/compose.yaml`, swap iris-gateway / iris-dashboard's `build:` to use this:
+Create the wrapper `iris/iris-bridge-entrypoint.sh`:
+
+```bash
+#!/usr/bin/env bash
+# Wraps upstream Hermes entrypoint to fix /opt/hermes/ui-tui ownership.
+# Must run before privilege drop. Upstream remaps hermes UID/GID at runtime
+# but doesn't chown /opt/hermes/ui-tui — which the dashboard's --tui flag
+# needs for `npm install`. Without this fix, npm install fails with EACCES.
+set -e
+
+if [ "$(id -u)" = "0" ]; then
+    chown -R "${HERMES_UID:-10000}:${HERMES_GID:-10000}" /opt/hermes/ui-tui 2>/dev/null || true
+fi
+
+exec /opt/hermes/docker/entrypoint.sh "$@"
+```
+
+In `iris/compose.yaml`, **both** iris-gateway and iris-dashboard use the bridge image (the dashboard needs the ui-tui chown for the Chat tab to work):
 
 ```yaml
   iris-gateway:
@@ -1889,9 +1919,11 @@ In `iris/compose.yaml`, swap iris-gateway / iris-dashboard's `build:` to use thi
       dockerfile: Dockerfile.iris-bridge
     image: iris-bridge:local
     # ... rest unchanged ...
-```
 
-(`iris-dashboard` doesn't need the bridge — keep it on `iris:local`.)
+  iris-dashboard:
+    image: iris-bridge:local   # use bridge (not iris:local) so --tui Chat tab works
+    # ... rest unchanged ...
+```
 
 ### G.10 — Layer 1: claude wrapper + Hermes `pre_tool_call` hook
 
@@ -2157,6 +2189,56 @@ Expected: Claude returns just `Alice` (or similar), having heeded the additional
 - ✅ Hard-blocked: prompts containing CC/SSN/IBAN; reads of files matching `*.env`/`*.pem`/`*credentials*`; writes containing well-known API-key patterns.
 - 🟡 Best-effort: Claude refraining from echoing PII in file content it read (additionalContext is a polite request, not a guarantee — Claude may comply but isn't forced to).
 - ❌ Out of scope: masking arbitrary file content before it reaches Anthropic (Claude Code API doesn't permit this). For genuinely sensitive data, route through `iris-private` (local Ollama, never leaves machine).
+
+### G.13 — Optional: Telegram + Discord messaging adapters
+
+Hermes auto-starts each adapter when its `BOT_TOKEN` is set. Without tokens, the gateway just runs the dashboard + cron — no messaging.
+
+**Telegram setup (~5 min):**
+
+1. Open Telegram, message **@BotFather**, send `/newbot`. Pick a name + unique `*bot` username. Copy the token (looks like `123456789:ABC...`).
+2. (Recommended) Send `/setprivacy` to BotFather → choose your bot → `Disable`. Lets the bot read all messages, not just `/`-commands.
+3. Message **@userinfobot** to get your numeric user ID.
+
+**Discord setup (~10 min):**
+
+1. https://discord.com/developers/applications → **New Application** (e.g., "Iris") → left sidebar **Bot**.
+2. **Reset Token** → copy now (you can't view it again).
+3. Same page, toggle ON: **Server Members Intent** + **Message Content Intent**.
+4. Left sidebar **OAuth2 → URL Generator**:
+   - Scopes: `bot`, `applications.commands`
+   - Permissions: View Channels, Send Messages, Read Message History, Attach Files, Embed Links, Send Messages in Threads, Add Reactions
+   - Open the generated URL → add bot to your server.
+5. Discord client: **Settings → Advanced → Developer Mode ON**, right-click your username → **Copy User ID**.
+
+**Wire tokens into the stack:**
+
+Add these lines to `~/iris/.env` (gitignored — never committed):
+
+```bash
+TELEGRAM_BOT_TOKEN=123456789:ABCdefGHI...
+TELEGRAM_ALLOWED_USERS=123456789                 # comma-separated for multiple users
+TELEGRAM_HOME_CHANNEL=123456789                  # usually your user ID for DM-mode
+
+DISCORD_BOT_TOKEN=MTI...
+DISCORD_ALLOWED_USERS=123456789012345678         # comma-separated for multiple users
+DISCORD_HOME_CHANNEL=                             # optional channel ID for proactive messages
+```
+
+`iris/compose.yaml` already exposes these env vars to iris-gateway. Recreate so it picks them up (env_file values are read at container creation, not on restart):
+
+```bash
+docker compose up -d iris-gateway --force-recreate
+docker compose logs iris-gateway --tail 20 | grep -iE "telegram|discord|messaging"
+```
+
+Expected: log lines confirming each adapter started. If you see `WARNING gateway.run: No messaging platforms enabled`, the env vars didn't make it in — check `~/iris/.env` for typos.
+
+**Verify:**
+- DM your Telegram bot — it should respond as Iris (using SOUL.md persona).
+- @-mention your Discord bot in a server channel where you added it — same.
+
+Both routes share the same brain (Kimi K2.6 or whatever `iris-default` is), the same Honcho memory, and all 5 Presidio guardrail layers. No per-platform config needed beyond the tokens.
 
 **STOP. Confirm with user before Phase H.**
 

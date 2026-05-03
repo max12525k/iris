@@ -81,6 +81,29 @@ The applied config has community-tuned optimizations:
 
 To customize Iris's persona, edit `iris/iris-config/SOUL.md` and re-run `mint-iris-key.sh`. To change config defaults, edit `iris/iris-config/config.template.yaml`.
 
+**Optional next step — messaging bots:** to talk to Iris from Telegram or Discord (instead of just the web dashboard), see [INSTALL.md Phase G.13](INSTALL.md). Add tokens to `.env`, recreate iris-gateway, you have a personal assistant in your messaging client of choice.
+
+## How to actually talk to Iris
+
+Three surfaces, all sharing the same brain + memory + guardrails:
+
+1. **Web dashboard Chat tab** at http://127.0.0.1:9119 — the dashboard ships with a `Chat` tab that embeds the full Hermes TUI in your browser (slash commands, model picker, streaming, the works). Refresh the page; the tab appears in the nav.
+2. **Telegram / Discord bots** — once configured per [INSTALL.md G.13](INSTALL.md), DM your Telegram bot or @-mention your Discord bot. Same Iris everywhere.
+3. **CLI inside the container** — `docker compose exec -it iris-gateway hermes` for an interactive REPL. Useful for debugging.
+
+For one-shot queries:
+```bash
+docker compose exec -T iris-gateway hermes -p "your question"
+```
+
+Useful slash commands once you're chatting:
+- `/model` — switch which `iris-*` route to use for this turn
+- `/reasoning low|medium|high|xhigh` — dial reasoning effort (Kimi K2.6 burns reasoning tokens by default)
+- `/compress` — manually summarize the conversation now
+- `/usage` — tokens + cost for this session
+- `/cc <task>` — route the whole turn to Claude Code via the sidecar (uses your Max plan)
+- `/clear` — start a fresh session, drop context
+
 ## Day-to-day ops
 
 ```bash

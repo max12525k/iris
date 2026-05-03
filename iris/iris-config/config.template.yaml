@@ -21,9 +21,10 @@ model:
   # specific tasks via --max-tokens or per-skill overrides.
   max_tokens: 4096
 
-# Reasoning effort default. Kimi K2.6 defaults to "medium" which burns 1000+
-# reasoning tokens per turn. Set to "low" for routine work; user can escalate
-# at runtime with `/reasoning high` (or "xhigh" for max). Effort tiers:
+# Reasoning effort default. Applies generically across providers (Anthropic
+# extended thinking, OpenAI o-series, Kimi K2.x reasoning, etc.).
+# "low" = sensible default for routine work; user can escalate at runtime
+# with `/reasoning high` (or "xhigh" for max). Effort tiers:
 #   none, minimal, low, medium, high, xhigh
 reasoning_effort: low
 
