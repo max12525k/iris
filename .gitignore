@@ -1,0 +1,80 @@
+# ─────────── Secrets — NEVER commit ───────────
+.env
+.env.*
+**/.env
+**/.env.*
+!.env.example
+!**/.env.example
+
+# Credentials, keys, tokens
+*.pem
+*.key
+*.crt
+*.p12
+*.pfx
+*.token
+*.secret
+secrets/
+credentials/
+service-account*.json
+auth.json
+
+# ─────────── Upstream clones — managed separately ───────────
+hermes-agent/
+honcho-src/
+
+# ─────────── Heavy data / backups ───────────
+backups/
+*.sql
+*.sql.gz
+*.dump
+*.bak
+*.tar
+*.tar.gz
+*.tgz
+*.zip
+
+# Local DB files (named Docker volumes don't escape, but bind mounts might)
+*.sqlite
+*.sqlite3
+*.db
+
+# ML / model artifacts (Ollama cache, GGUF blobs, weights)
+*.gguf
+*.bin
+*.safetensors
+*.onnx
+*.pt
+*.ckpt
+models/
+.ollama/
+
+# ─────────── Python (defensive, in case scripts/ grows) ───────────
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# ─────────── Logs ───────────
+*.log
+logs/
+
+# ─────────── Local Claude Code state ───────────
+.claude/
+
+# ─────────── OS / editor noise ───────────
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# ─────────── Local-only compose overrides ───────────
+compose.local.yaml
+docker-compose.local.yml

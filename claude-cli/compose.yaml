@@ -1,0 +1,26 @@
+volumes:
+  claude_creds:
+
+services:
+  claude-cli:
+    build:
+      context: .
+      args:
+        HERMES_UID: ${HERMES_UID:-10000}
+        HERMES_GID: ${HERMES_GID:-10000}
+    image: claude-cli:local
+    container_name: claude-cli
+    restart: unless-stopped
+    # No `user:` directive — entrypoint runs as root briefly to fix volume
+    # ownership + seed defaults, then drops to `claude` via `su` for CMD.
+    working_dir: /workspace
+    volumes:
+      - claude_creds:/home/claude/.claude
+      - ${HOME}/iris-workspace:/workspace
+    environment:
+      PRESIDIO_ANALYZER_API_BASE: http://presidio-analyzer:3000
+      PRESIDIO_ANONYMIZER_API_BASE: http://presidio-anonymizer:3000
+    networks:
+      - frontend  # for Anthropic API egress
+      - backend   # for Presidio access from hook scripts
+    command: ["tail", "-f", "/dev/null"]

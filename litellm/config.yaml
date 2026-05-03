@@ -1,0 +1,188 @@
+# LiteLLM proxy config — all routes via OpenRouter except local Ollama.
+# Real provider key lives in litellm/.env (only OPENROUTER_API_KEY needed).
+# Iris never sees the OpenRouter key — it uses virtual LiteLLM keys instead.
+#
+# Picks reflect the Hermes upstream curated catalog (April 30, 2026):
+#   https://hermes-agent.nousresearch.com/docs/api/model-catalog.json
+# Rank-ordered: Kimi K2.6 ⭐ recommended → Opus 4.7 → Sonnet 4.6 → Qwen3.6 Plus → Haiku 4.5 → GPT-5.5
+# DeepSeek excluded from this config (94-96% hallucination rate; also absent from upstream catalog).
+
+model_list:
+  # ─────────── Real backends (direct model access) ───────────
+  - model_name: claude-opus
+    litellm_params:
+      model: openrouter/anthropic/claude-opus-4.7
+      api_key: os.environ/OPENROUTER_API_KEY
+
+  - model_name: claude-sonnet
+    litellm_params:
+      model: openrouter/anthropic/claude-sonnet-4.6
+      api_key: os.environ/OPENROUTER_API_KEY
+
+  - model_name: claude-haiku
+    litellm_params:
+      model: openrouter/anthropic/claude-haiku-4.5
+      api_key: os.environ/OPENROUTER_API_KEY
+
+  - model_name: gpt-5
+    litellm_params:
+      model: openrouter/openai/gpt-5.5
+      api_key: os.environ/OPENROUTER_API_KEY
+
+  - model_name: gpt-5-mini
+    litellm_params:
+      model: openrouter/openai/gpt-5-mini
+      api_key: os.environ/OPENROUTER_API_KEY
+
+  - model_name: gemini-pro
+    litellm_params:
+      model: openrouter/google/gemini-3.1-pro-preview
+      api_key: os.environ/OPENROUTER_API_KEY
+
+  - model_name: gemini-flash
+    litellm_params:
+      model: openrouter/google/gemini-3-flash-preview
+      api_key: os.environ/OPENROUTER_API_KEY
+
+  - model_name: kimi
+    litellm_params:
+      model: openrouter/moonshotai/kimi-k2.6
+      api_key: os.environ/OPENROUTER_API_KEY
+
+  - model_name: qwen-plus
+    litellm_params:
+      model: openrouter/qwen/qwen3.6-plus
+      api_key: os.environ/OPENROUTER_API_KEY
+
+  - model_name: glm
+    litellm_params:
+      model: openrouter/z-ai/glm-5.1
+      api_key: os.environ/OPENROUTER_API_KEY
+
+  # Local Ollama on host Mac — reaches via host.docker.internal (extra_hosts in compose)
+  - model_name: ollama-local
+    litellm_params:
+      model: ollama_chat/qwen2.5:32b
+      api_base: http://host.docker.internal:11434
+
+  # ─────────── Virtual aliases (logical names Iris uses) ───────────
+
+  # iris-default — primary orchestrator. Kimi K2.6 is upstream Hermes ⭐ recommended.
+  # Hermes v0.11/v0.12 ship Kimi-specific tool-call patches (PRs 13148, 15749, 15762, 18045).
+  # 39% hallucination (Opus territory). 6.7x cheaper than Opus 4.7.
+  # Falls back through Sonnet -> Opus on errors (see router_settings below).
+  - model_name: iris-default
+    litellm_params:
+      model: openrouter/moonshotai/kimi-k2.6
+      api_key: os.environ/OPENROUTER_API_KEY
+      guardrails: ["presidio-pii", "hide-secrets"]
+
+  # iris-cheap — high-volume verifiable tasks. Qwen3.6 Plus: #3 MCP-Atlas (0.741),
+  # #1 MCPMark tool-calling (48.2%), 1M ctx. Caveat: 26.5% fabrication on API knowledge —
+  # only route work where outputs are validated (tool results, code with tests, structured extraction).
+  - model_name: iris-cheap
+    litellm_params:
+      model: openrouter/qwen/qwen3.6-plus
+      api_key: os.environ/OPENROUTER_API_KEY
+      guardrails: ["presidio-pii", "hide-secrets"]
+
+  # iris-research — escalation route for ambiguous planning, deep analysis, top-tier reasoning.
+  # Opus 4.7: #1 MCP-Atlas (0.773), #1 SWE-Verified (87.6%), top EQ-Creative (Elo 2216), 1M ctx.
+  - model_name: iris-research
+    litellm_params:
+      model: openrouter/anthropic/claude-opus-4.7
+      api_key: os.environ/OPENROUTER_API_KEY
+      guardrails: ["presidio-pii", "hide-secrets"]
+
+  # iris-private — local Ollama only. Never leaves the machine. Use for sensitive prompts.
+  - model_name: iris-private
+    litellm_params:
+      model: ollama_chat/qwen2.5:32b
+      api_base: http://host.docker.internal:11434
+
+  # iris-marketing — creative writing / copy. Same backend as iris-default (Kimi K2.6,
+  # EQ-Creative 1808) — kept as a separate alias for budget tracking and future re-routing.
+  - model_name: iris-marketing
+    litellm_params:
+      model: openrouter/moonshotai/kimi-k2.6
+      api_key: os.environ/OPENROUTER_API_KEY
+      guardrails: ["presidio-pii", "hide-secrets"]
+
+  # iris-coding — daily code workflow with tool calls. GLM-5.1: first open-weight to top
+  # SWE-bench Pro (58.4%), #5 MCP-Atlas (0.718), upstream-curated. 200K ctx — Hermes
+  # compression handles longer codebases.
+  - model_name: iris-coding
+    litellm_params:
+      model: openrouter/z-ai/glm-5.1
+      api_key: os.environ/OPENROUTER_API_KEY
+      guardrails: ["presidio-pii", "hide-secrets"]
+
+  # iris-briefing — daily summaries (long input, short output). Gemini 3 Flash:
+  # $0.50/$3, 1M ctx, stable OpenRouter throughput. Compat-layer issues only affect
+  # tool-calling / streaming, not batch summarization.
+  - model_name: iris-briefing
+    litellm_params:
+      model: openrouter/google/gemini-3-flash-preview
+      api_key: os.environ/OPENROUTER_API_KEY
+      guardrails: ["presidio-pii", "hide-secrets"]
+
+litellm_settings:
+  # Prompt caching — saves ~90% on cached input tokens for Anthropic family
+  cache: true
+  cache_params:
+    type: local
+
+  # Drop unsupported params silently rather than erroring
+  drop_params: true
+
+  # Telemetry off
+  telemetry: false
+  set_verbose: false
+
+  # Guardrails (Presidio PII + secret detection) deferred — they require a separate
+  # Presidio service to be deployed and the modern LiteLLM format expects guardrails
+  # at the top level. Re-enable as a top-level `guardrails:` block once Presidio is wired in.
+
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY
+  database_url: os.environ/DATABASE_URL
+  store_model_in_db: true
+  store_prompts_in_spend_logs: true
+
+# ─────────── Guardrails (top-level, applied per-alias via litellm_params.guardrails) ───────────
+# Presidio analyzer + anonymizer run as sidecar services on the backend network.
+# URLs come from PRESIDIO_*_API_BASE env vars in litellm/.env.
+guardrails:
+  - guardrail_name: "presidio-pii"
+    litellm_params:
+      guardrail: presidio
+      mode: "pre_call"
+      pii_entities_config:
+        # BLOCK = reject the request entirely
+        CREDIT_CARD: "BLOCK"
+        US_SSN: "BLOCK"
+        IBAN_CODE: "BLOCK"
+        # MASK = replace with placeholder before sending upstream
+        EMAIL_ADDRESS: "MASK"
+        PHONE_NUMBER: "MASK"
+        # PERSON / LOCATION omitted — too noisy for a personal assistant.
+
+  - guardrail_name: "hide-secrets"
+    litellm_params:
+      guardrail: "hide-secrets"
+      mode: "pre_call"
+
+router_settings:
+  routing_strategy: "simple-shuffle"
+  num_retries: 2
+  timeout: 60
+
+  # Fallback chains — "Opus only when Kimi doesn't work" policy.
+  # Default escalates directly to Opus on errors. Other aliases fall back to Kimi default.
+  fallbacks:
+    - iris-default: ["iris-research"]            # Kimi -> Opus when Kimi fails
+    - iris-research: ["iris-default"]            # Opus -> Kimi (cost saver if Opus rate-limited)
+    - iris-coding: ["iris-default", "iris-research"]   # GLM -> Kimi -> Opus
+    - iris-marketing: ["iris-research"]          # Kimi -> Opus (same primary as default)
+    - iris-cheap: ["iris-default"]               # Qwen -> Kimi
+    - iris-briefing: ["iris-default"]            # Gemini Flash -> Kimi

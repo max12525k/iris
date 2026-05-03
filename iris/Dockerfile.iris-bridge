@@ -1,0 +1,15 @@
+FROM iris:local
+
+USER root
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      python3-requests docker.io ca-certificates \
+  && rm -rf /var/lib/apt/lists/*
+
+COPY presidio-mask.py /usr/local/bin/presidio-mask
+COPY claude-wrapper.sh /usr/local/bin/claude
+RUN mkdir -p /opt/iris-hooks
+COPY hooks/pre_tool_call.sh /opt/iris-hooks/pre_tool_call.sh
+RUN chmod +x /usr/local/bin/presidio-mask /usr/local/bin/claude /opt/iris-hooks/pre_tool_call.sh
+
+# Don't switch USER — upstream entrypoint expects to start as root to chown /opt/data
+# and then drop privileges to `hermes` itself.

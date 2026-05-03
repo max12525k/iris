@@ -1,0 +1,138 @@
+# Iris config template — used by scripts/mint-iris-key.sh to generate the
+# live /opt/data/config.yaml inside iris-gateway. The script substitutes the
+# IRIS_VKEY placeholder with the actual LiteLLM virtual key value.
+#
+# Cost / performance tuning is reflected here:
+#   - prompt_caching.cache_ttl: 1h  → ~$400-850/mo savings for active users
+#     (2x write cost amortized; vastly cheaper if 60%+ of writes become reads)
+#   - compression: explicit defaults; fires at 50% of context window
+#   - auxiliary models default to main → uses iris-default (Kimi K2.6) for
+#     compression/title-generation/etc. instead of a separate cheap model
+#     (already v0.11+ default; making explicit for clarity)
+#   - hooks block keeps Layer-1 Presidio guard active
+
+model:
+  default: "iris-default"
+  provider: "custom"
+  base_url: "http://litellm:4000/v1"
+  api_key: "${IRIS_VKEY}"
+  # Cap output to prevent runaway responses. Kimi K2.6 default ceiling is 262K
+  # tokens which can cost $0.50+ per bad turn. 4K covers normal Q&A; bump for
+  # specific tasks via --max-tokens or per-skill overrides.
+  max_tokens: 4096
+
+# Reasoning effort default. Kimi K2.6 defaults to "medium" which burns 1000+
+# reasoning tokens per turn. Set to "low" for routine work; user can escalate
+# at runtime with `/reasoning high` (or "xhigh" for max). Effort tiers:
+#   none, minimal, low, medium, high, xhigh
+reasoning_effort: low
+
+# Lazy skill loading — biggest single token-overhead cut. Hermes ships 89
+# bundled skills; eager mode injects all 89 names+descriptions into every
+# system prompt (~2K tokens fixed cost per call). Lazy mode replaces the block
+# with one line: "A skills catalog is available — call list_skills() when you
+# think a specialized skill might help." Saves ~2K tokens × every call.
+# (Reference: upstream issue #2045)
+skills:
+  loading: lazy
+
+# Anthropic-style prompt caching, applied across LiteLLM (which forwards
+# cache_control markers to upstream Anthropic via OpenRouter).
+prompt_caching:
+  cache_ttl: "1h"
+
+# Conversation compression — fires when prompt tokens hit 50% of context window.
+# Tighter target_ratio (0.10 vs default 0.20) means smaller post-compression
+# context = lower ongoing per-call cost, at the price of more aggressive
+# summarization. Worth it for long-running sessions where each compressed turn
+# is multiplied across all subsequent turns.
+compression:
+  enabled: true
+  threshold: 0.50         # fraction of context window before compression triggers
+  target_ratio: 0.10      # tail budget — tighter = cheaper continuation
+  protect_last_n: 20      # always preserve the last N messages verbatim
+
+# Auxiliary model routing — community-validated cost optimization.
+# Every aux task defaults to "main" (Kimi K2.6, $0.74/$3.49) which is wasteful
+# for trivial tasks like title gen. Per community analysis (Hermes upstream
+# guidance + remoteopenclaw blog), routing compression/web_extract/title_gen/
+# session_search/skills_hub to cheaper models saves 50-70% on auxiliary spend
+# without quality degradation.
+#
+# Decisions (per task):
+#   compression  → iris-briefing (Gemini 3 Flash $0.50/$3, vision-capable, fast)
+#                  Output becomes part of all future context; needs decent quality.
+#   vision       → iris-briefing (Gemini 3 Flash; Kimi K2.6 has no vision capability)
+#   title_gen    → iris-cheap (Qwen3.6 Plus $0.33/$1.95) — title is 5-10 tokens
+#   session_search → iris-cheap — classification, no reasoning needed
+#   web_extract  → iris-cheap — page summary is classification-y
+#   skills_hub   → iris-cheap — picker classification
+#   mcp          → iris-cheap — tool routing classification
+#   approval     → main (Kimi K2.6) — security-relevant, keep quality high
+auxiliary:
+  compression:
+    provider: custom
+    base_url: http://litellm:4000/v1
+    api_key: "${IRIS_VKEY}"
+    model: iris-briefing
+    timeout: 120
+  vision:
+    provider: custom
+    base_url: http://litellm:4000/v1
+    api_key: "${IRIS_VKEY}"
+    model: iris-briefing
+    timeout: 120
+  title_gen:
+    provider: custom
+    base_url: http://litellm:4000/v1
+    api_key: "${IRIS_VKEY}"
+    model: iris-cheap
+    timeout: 60
+  session_search:
+    provider: custom
+    base_url: http://litellm:4000/v1
+    api_key: "${IRIS_VKEY}"
+    model: iris-cheap
+    timeout: 60
+  web_extract:
+    provider: custom
+    base_url: http://litellm:4000/v1
+    api_key: "${IRIS_VKEY}"
+    model: iris-cheap
+    timeout: 120
+  skills_hub:
+    provider: custom
+    base_url: http://litellm:4000/v1
+    api_key: "${IRIS_VKEY}"
+    model: iris-cheap
+    timeout: 60
+  mcp:
+    provider: custom
+    base_url: http://litellm:4000/v1
+    api_key: "${IRIS_VKEY}"
+    model: iris-cheap
+    timeout: 60
+  approval:
+    provider: main
+
+# Layer-1 PII guard for terminal commands invoking `claude`.
+# Schema (per upstream cli-config.yaml.example):
+#   - matcher: optional regex filter on tool name
+#   - command: path to executable hook script
+#   - timeout: seconds
+# Gateway runs non-interactively, so we auto-accept the hook (alternative:
+# HERMES_ACCEPT_HOOKS=1 env var, set in compose).
+hooks_auto_accept: true
+hooks:
+  pre_tool_call:
+    - matcher: "terminal"
+      command: /opt/iris-hooks/pre_tool_call.sh
+      timeout: 15
+
+# Skill loading optimization — Hermes ships 89 bundled skills. Most are loaded
+# eagerly into the system prompt (token cost). For skills you rarely use, set
+# them to "name-only" so the picker knows about them but doesn't load body
+# until invoked. Mirrors the strategy used in claude-cli/iris-config/settings.json.
+# Add overrides here as you decide which skills you don't need eagerly loaded.
+# skill_overrides:
+#   example-skill: "name-only"

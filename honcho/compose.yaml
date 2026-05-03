@@ -1,0 +1,85 @@
+volumes:
+  honcho_pgdata:
+
+services:
+  honcho-api:
+    build:
+      context: ../honcho-src
+      dockerfile: Dockerfile
+    image: honcho:local
+    container_name: honcho-api
+    entrypoint: ["sh", "docker/entrypoint.sh"]
+    restart: unless-stopped
+    depends_on:
+      honcho-db:
+        condition: service_healthy
+      honcho-redis:
+        condition: service_healthy
+    environment:
+      DB_CONNECTION_URI: "postgresql+psycopg://postgres:${HONCHO_DB_PASSWORD}@honcho-db:5432/postgres"
+      CACHE_URL: "redis://honcho-redis:6379/0?suppress=true"
+      CACHE_ENABLED: "true"
+    env_file:
+      - path: ../honcho-src/.env
+        required: false
+    # frontend = outbound internet for tiktoken tokenizer fetch + future LLM API calls.
+    # No `ports:` block — service is not exposed inbound, only egress is enabled.
+    networks:
+      - frontend
+      - backend
+      - data
+
+  honcho-deriver:
+    image: honcho:local
+    container_name: honcho-deriver
+    restart: unless-stopped
+    depends_on:
+      honcho-api:
+        condition: service_started
+    environment:
+      DB_CONNECTION_URI: "postgresql+psycopg://postgres:${HONCHO_DB_PASSWORD}@honcho-db:5432/postgres"
+      CACHE_URL: "redis://honcho-redis:6379/0?suppress=true"
+      CACHE_ENABLED: "true"
+    env_file:
+      - path: ../honcho-src/.env
+        required: false
+    # frontend for tokenizer + outbound LLM API calls (same as honcho-api).
+    networks:
+      - frontend
+      - backend
+      - data
+    entrypoint: []
+    command: ["python", "-m", "src.deriver"]
+
+  honcho-db:
+    image: pgvector/pgvector:pg15
+    container_name: honcho-db
+    restart: unless-stopped
+    command: ["postgres", "-c", "max_connections=200"]
+    environment:
+      POSTGRES_DB: postgres
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${HONCHO_DB_PASSWORD}
+      PGDATA: /var/lib/postgresql/data/pgdata
+    volumes:
+      - ../honcho-src/database/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+      - honcho_pgdata:/var/lib/postgresql/data/
+    networks:
+      - data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  honcho-redis:
+    image: redis:8.2
+    container_name: honcho-redis
+    restart: unless-stopped
+    networks:
+      - data
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5

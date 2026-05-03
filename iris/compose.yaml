@@ -1,0 +1,47 @@
+volumes:
+  data:
+
+services:
+  iris-gateway:
+    build:
+      context: .
+      dockerfile: Dockerfile.iris-bridge
+    image: iris-bridge:local
+    container_name: iris-gateway
+    restart: unless-stopped
+    volumes:
+      - data:/opt/data
+      - ${HOME}/iris-workspace:/workspace
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    environment:
+      HERMES_UID: ${HERMES_UID:-10000}
+      HERMES_GID: ${HERMES_GID:-10000}
+      PRESIDIO_ANALYZER_API_BASE: http://presidio-analyzer:3000
+      PRESIDIO_ANONYMIZER_API_BASE: http://presidio-anonymizer:3000
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    networks:
+      - frontend  # for Presidio access from Layer-1 hook
+      - backend
+    command: ["gateway", "run"]
+
+  iris-dashboard:
+    image: iris:local
+    container_name: iris-dashboard
+    restart: unless-stopped
+    depends_on:
+      - iris-gateway
+    volumes:
+      - data:/opt/data
+      - ${HOME}/iris-workspace:/workspace
+    environment:
+      HERMES_UID: ${HERMES_UID:-10000}
+      HERMES_GID: ${HERMES_GID:-10000}
+    networks:
+      - frontend
+      - backend
+    ports:
+      - "127.0.0.1:9119:9119"
+    # --insecure is required because we bind to 0.0.0.0 inside the container.
+    # Safe here: compose publishes port 9119 only to host 127.0.0.1, not 0.0.0.0.
+    command: ["dashboard", "--host", "0.0.0.0", "--no-open", "--insecure"]

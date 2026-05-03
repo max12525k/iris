@@ -1,0 +1,17 @@
+name: iris
+
+include:
+  - ./iris/compose.yaml
+  - ./litellm/compose.yaml
+  - ./honcho/compose.yaml
+  - ./claude-cli/compose.yaml
+
+networks:
+  frontend:
+    driver: bridge
+  backend:
+    driver: bridge
+    internal: true
+  data:
+    driver: bridge
+    internal: true

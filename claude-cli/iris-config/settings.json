@@ -1,0 +1,160 @@
+{
+  "theme": "dark",
+  "permissions": {
+    "deny": [
+      "Read(./.env)",
+      "Read(./.env.*)",
+      "Read(/workspace/.env)",
+      "Read(/workspace/.env.*)",
+      "Read(./*.pem)",
+      "Read(./*.key)",
+      "Read(./id_rsa*)",
+      "Read(./.ssh/**)",
+      "Read(./.aws/credentials*)",
+      "Read(./.gnupg/**)",
+      "Read(./.netrc)"
+    ],
+    "allow": [
+      "WebFetch(domain:docs.nvidia.com)",
+      "WebFetch(domain:developer.nvidia.com)",
+      "Bash(docker compose *)"
+    ]
+  },
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/usr/local/bin/presidio-mask-prompt"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Read|Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/usr/local/bin/read-deny-guard"
+          }
+        ]
+      },
+      {
+        "matcher": "Edit|Write|Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/usr/local/bin/write-secret-guard"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Read|Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/usr/local/bin/pii-context-injector"
+          }
+        ]
+      }
+    ]
+  },
+  "enabledPlugins": {
+    "pm-toolkit@pm-skills": true,
+    "pm-product-strategy@pm-skills": true,
+    "pm-product-discovery@pm-skills": true,
+    "pm-market-research@pm-skills": true,
+    "pm-data-analytics@pm-skills": true,
+    "pm-marketing-growth@pm-skills": true,
+    "pm-go-to-market@pm-skills": true,
+    "pm-execution@pm-skills": true,
+    "pyright-lsp@claude-plugins-official": true,
+    "playground@claude-plugins-official": true
+  },
+  "extraKnownMarketplaces": {
+    "pm-skills": {
+      "source": {
+        "source": "github",
+        "repo": "phuryn/pm-skills"
+      }
+    }
+  },
+  "skillOverrides": {
+    "agent-introspection-debugging": "name-only",
+    "api-connector-builder": "name-only",
+    "autonomous-agent-harness": "name-only",
+    "continuous-agent-loop": "name-only",
+    "docker-patterns": "name-only",
+    "iterative-retrieval": "name-only",
+    "pm-data-analytics:ab-test-analysis": "name-only",
+    "pm-data-analytics:cohort-analysis": "name-only",
+    "pm-data-analytics:sql-queries": "name-only",
+    "pm-execution:brainstorm-okrs": "name-only",
+    "pm-execution:create-prd": "name-only",
+    "pm-execution:dummy-dataset": "name-only",
+    "pm-execution:job-stories": "name-only",
+    "pm-execution:outcome-roadmap": "name-only",
+    "pm-execution:pre-mortem": "name-only",
+    "pm-execution:prioritization-frameworks": "name-only",
+    "pm-execution:release-notes": "name-only",
+    "pm-execution:retro": "name-only",
+    "pm-execution:sprint-plan": "name-only",
+    "pm-execution:stakeholder-map": "name-only",
+    "pm-execution:summarize-meeting": "name-only",
+    "pm-execution:test-scenarios": "name-only",
+    "pm-execution:user-stories": "name-only",
+    "pm-execution:wwas": "name-only",
+    "pm-go-to-market:beachhead-segment": "name-only",
+    "pm-go-to-market:competitive-battlecard": "name-only",
+    "pm-go-to-market:growth-loops": "name-only",
+    "pm-go-to-market:gtm-motions": "name-only",
+    "pm-go-to-market:gtm-strategy": "name-only",
+    "pm-go-to-market:ideal-customer-profile": "name-only",
+    "pm-market-research:competitor-analysis": "name-only",
+    "pm-market-research:customer-journey-map": "name-only",
+    "pm-market-research:market-segments": "name-only",
+    "pm-market-research:market-sizing": "name-only",
+    "pm-market-research:sentiment-analysis": "name-only",
+    "pm-market-research:user-personas": "name-only",
+    "pm-market-research:user-segmentation": "name-only",
+    "pm-marketing-growth:marketing-ideas": "name-only",
+    "pm-marketing-growth:north-star-metric": "name-only",
+    "pm-marketing-growth:positioning-ideas": "name-only",
+    "pm-marketing-growth:product-name": "name-only",
+    "pm-marketing-growth:value-prop-statements": "name-only",
+    "pm-product-discovery:analyze-feature-requests": "name-only",
+    "pm-product-discovery:brainstorm-experiments-existing": "name-only",
+    "pm-product-discovery:brainstorm-experiments-new": "name-only",
+    "pm-product-discovery:brainstorm-ideas-existing": "name-only",
+    "pm-product-discovery:brainstorm-ideas-new": "name-only",
+    "pm-product-discovery:identify-assumptions-existing": "name-only",
+    "pm-product-discovery:identify-assumptions-new": "name-only",
+    "pm-product-discovery:interview-script": "name-only",
+    "pm-product-discovery:metrics-dashboard": "name-only",
+    "pm-product-discovery:opportunity-solution-tree": "name-only",
+    "pm-product-discovery:prioritize-assumptions": "name-only",
+    "pm-product-discovery:prioritize-features": "name-only",
+    "pm-product-discovery:summarize-interview": "name-only",
+    "pm-product-strategy:ansoff-matrix": "name-only",
+    "pm-product-strategy:business-model": "name-only",
+    "pm-product-strategy:lean-canvas": "name-only",
+    "pm-product-strategy:monetization-strategy": "name-only",
+    "pm-product-strategy:pestle-analysis": "name-only",
+    "pm-product-strategy:porters-five-forces": "name-only",
+    "pm-product-strategy:pricing-strategy": "name-only",
+    "pm-product-strategy:product-strategy": "name-only",
+    "pm-product-strategy:product-vision": "name-only",
+    "pm-product-strategy:startup-canvas": "name-only",
+    "pm-product-strategy:swot-analysis": "name-only",
+    "pm-product-strategy:value-proposition": "name-only",
+    "pm-toolkit:draft-nda": "name-only",
+    "pm-toolkit:grammar-check": "name-only",
+    "pm-toolkit:privacy-policy": "name-only",
+    "pm-toolkit:review-resume": "name-only"
+  },
+  "skillListingMaxDescChars": 250
+}

@@ -1,0 +1,65 @@
+x-app-hardening: &app-hardening
+  security_opt:
+    - "no-new-privileges:true"
+  cap_drop:
+    - ALL
+  restart: always
+  logging:
+    driver: json-file
+    options:
+      max-size: "10m"
+      max-file: "5"
+
+x-db-hardening: &db-hardening
+  security_opt:
+    - "no-new-privileges:true"
+  restart: always
+  logging:
+    driver: json-file
+    options:
+      max-size: "10m"
+      max-file: "5"
+
+services:
+  iris-gateway:
+    <<: *app-hardening
+    read_only: true
+    tmpfs:
+      - /tmp:size=128M,mode=1777
+
+  iris-dashboard:
+    <<: *app-hardening
+    read_only: true
+    tmpfs:
+      - /tmp:size=64M,mode=1777
+
+  litellm:
+    <<: *app-hardening
+    read_only: true
+    tmpfs:
+      - /tmp:size=128M,mode=1777
+      - /app/cache:size=128M,mode=1777
+
+  litellm-db:
+    <<: *db-hardening
+
+  prometheus:
+    <<: *db-hardening
+
+  honcho-api:
+    <<: *app-hardening
+    read_only: true
+    tmpfs:
+      - /tmp:size=128M,mode=1777
+
+  honcho-deriver:
+    <<: *app-hardening
+    read_only: true
+    tmpfs:
+      - /tmp:size=128M,mode=1777
+
+  honcho-db:
+    <<: *db-hardening
+
+  honcho-redis:
+    <<: *db-hardening

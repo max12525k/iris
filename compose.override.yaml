@@ -1,0 +1,20 @@
+services:
+  iris-gateway:
+    environment:
+      LOG_LEVEL: debug
+      HERMES_DEBUG: "true"
+
+  litellm:
+    command:
+      - "--config=/app/config.yaml"
+      - "--detailed_debug"
+    environment:
+      LITELLM_LOG: DEBUG
+
+  honcho-api:
+    environment:
+      LOG_LEVEL: DEBUG
+
+  honcho-deriver:
+    environment:
+      LOG_LEVEL: DEBUG

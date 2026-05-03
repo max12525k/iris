@@ -1,0 +1,100 @@
+volumes:
+  litellm_postgres_data:
+  prometheus_data:
+
+services:
+  litellm:
+    image: docker.litellm.ai/berriai/litellm:main-stable
+    container_name: litellm
+    restart: unless-stopped
+    volumes:
+      - ./config.yaml:/app/config.yaml:ro
+    command:
+      - "--config=/app/config.yaml"
+    environment:
+      DATABASE_URL: "postgresql://llmproxy:${LITELLM_DB_PASSWORD}@litellm-db:5432/litellm"
+      STORE_MODEL_IN_DB: "True"
+    env_file:
+      - ./.env
+    depends_on:
+      litellm-db:
+        condition: service_healthy
+      presidio-analyzer:
+        condition: service_healthy
+      presidio-anonymizer:
+        condition: service_healthy
+    networks:
+      - frontend
+      - backend
+      - data
+    ports:
+      - "127.0.0.1:4000:4000"
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - python3 -c "import urllib.request; urllib.request.urlopen('http://localhost:4000/health/liveliness')"
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  litellm-db:
+    image: postgres:16
+    container_name: litellm-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: litellm
+      POSTGRES_USER: llmproxy
+      POSTGRES_PASSWORD: ${LITELLM_DB_PASSWORD}
+    volumes:
+      - litellm_postgres_data:/var/lib/postgresql/data
+    networks:
+      - data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -d litellm -U llmproxy"]
+      interval: 1s
+      timeout: 5s
+      retries: 10
+
+  prometheus:
+    image: prom/prometheus
+    container_name: prometheus
+    restart: unless-stopped
+    volumes:
+      - prometheus_data:/prometheus
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--storage.tsdb.retention.time=15d"
+    networks:
+      - frontend
+      - backend
+    ports:
+      - "127.0.0.1:9090:9090"
+
+  presidio-analyzer:
+    image: mcr.microsoft.com/presidio-analyzer:latest
+    container_name: presidio-analyzer
+    restart: unless-stopped
+    networks:
+      - backend
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:3000/health')\""]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  presidio-anonymizer:
+    image: mcr.microsoft.com/presidio-anonymizer:latest
+    container_name: presidio-anonymizer
+    restart: unless-stopped
+    networks:
+      - backend
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:3000/health')\""]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
