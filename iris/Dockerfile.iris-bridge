@@ -12,7 +12,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN uv pip install --python /opt/hermes/.venv/bin/python \
       'opentelemetry-api>=1.27,<2' \
       'opentelemetry-sdk>=1.27,<2' \
-      'opentelemetry-exporter-otlp-proto-grpc>=1.27,<2'
+      'opentelemetry-exporter-otlp-proto-grpc>=1.27,<2' \
+      'psycopg[binary]>=3.2,<4'
+
+# V2 Plane 1 / Phase 6 — audit log emitter requires Postgres (psycopg).
+# Installed alongside OTel above so wrappers can dual-write to the
+# operational event log AND the compliance audit log.
 
 # Narrow sudo grant for the `hermes` user: apt-get update + apt-get install only.
 # Lets `iris-learn apt <pkg>` install runtime packages into the live container
@@ -45,6 +50,7 @@ COPY bin/iris-lessons-render.py /usr/local/bin/iris-lessons-render
 COPY bin/_event_log.py /usr/local/bin/_event_log
 COPY bin/_event_log_init.sql /usr/local/bin/_event_log_init.sql
 COPY bin/iris-curator.py /usr/local/bin/iris-curator
+COPY bin/_audit_emit.py /usr/local/bin/_audit_emit
 RUN mkdir -p /opt/iris-hooks
 COPY hooks/pre_tool_call.sh /opt/iris-hooks/pre_tool_call.sh
 RUN chmod +x /usr/local/bin/presidio-mask /usr/local/bin/claude \
@@ -53,7 +59,7 @@ RUN chmod +x /usr/local/bin/presidio-mask /usr/local/bin/claude \
               /usr/local/bin/iris-mcp /usr/local/bin/iris-mcp-reconcile \
               /usr/local/bin/_otel_emit /usr/local/bin/_record_lesson \
               /usr/local/bin/iris-lessons-render /usr/local/bin/_event_log \
-              /usr/local/bin/iris-curator \
+              /usr/local/bin/iris-curator /usr/local/bin/_audit_emit \
               /opt/iris-hooks/pre_tool_call.sh
 
 # ─── Bake learned packages into the image ──────────────────────────────────

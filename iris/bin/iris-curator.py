@@ -55,19 +55,31 @@ def _connect() -> sqlite3.Connection:
     return sqlite3.connect(str(DB_PATH))
 
 
-def _events_since(con: sqlite3.Connection, since: dt.datetime) -> list[sqlite3.Row]:
+def _events_since(con: sqlite3.Connection, since: dt.datetime,
+                  tenant: str | None = None,
+                  profile: str | None = None) -> list[sqlite3.Row]:
+    """Query events since a window; optionally filter by tenant + profile.
+
+    Phase 7 multi-tenant: when called with --tenant, only events for that
+    tenant come back. Combined with --profile, you get a per-tenant per-
+    role distill (e.g., "what did Acme's coder profile do this week").
+    """
     con.row_factory = sqlite3.Row
-    cursor = con.execute(
-        """
+    sql = """
         SELECT id, ts, profile, tenant, actor, category, action, subject,
                payload, outcome, trace_id, cost_usd, tokens_in, tokens_out
         FROM events
         WHERE ts >= ?
-        ORDER BY ts ASC
-        """,
-        (since.strftime("%Y-%m-%d %H:%M:%S"),),
-    )
-    return cursor.fetchall()
+    """
+    params: list = [since.strftime("%Y-%m-%d %H:%M:%S")]
+    if tenant is not None:
+        sql += " AND tenant = ?"
+        params.append(tenant)
+    if profile is not None:
+        sql += " AND profile = ?"
+        params.append(profile)
+    sql += " ORDER BY ts ASC"
+    return con.execute(sql, params).fetchall()
 
 
 def _summarize(rows: list[sqlite3.Row]) -> dict:
@@ -213,6 +225,10 @@ def main() -> int:
                    help="print to stdout instead of writing a file")
     p.add_argument("--status", action="store_true",
                    help="show event log stats and exit")
+    p.add_argument("--tenant", default=None,
+                   help="filter events to this tenant only (Phase 7 multi-tenant)")
+    p.add_argument("--profile", default=None,
+                   help="filter events to this profile only (researcher | coder | ...)")
     args = p.parse_args()
 
     if args.status:
@@ -226,7 +242,7 @@ def main() -> int:
     since = _parse_since(args.since)
 
     con = _connect()
-    rows = _events_since(con, since)
+    rows = _events_since(con, since, tenant=args.tenant, profile=args.profile)
     summary = _summarize(rows)
     md = _markdown(summary, since, until)
 
@@ -235,7 +251,14 @@ def main() -> int:
         return 0
 
     OUT_DIR.mkdir(parents=True, exist_ok=True)
-    out_path = OUT_DIR / f"distill-{until.strftime('%Y-%m-%d')}.md"
+    # Filename includes tenant + profile when set, so multi-tenant distills
+    # don't overwrite each other.
+    suffix = ""
+    if args.tenant:
+        suffix += f"-tenant-{args.tenant}"
+    if args.profile:
+        suffix += f"-profile-{args.profile}"
+    out_path = OUT_DIR / f"distill-{until.strftime('%Y-%m-%d')}{suffix}.md"
     out_path.write_text(md)
     print(f"iris-curator: wrote {out_path}  ({summary['total']} events)")
     return 0

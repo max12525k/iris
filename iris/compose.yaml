@@ -44,6 +44,14 @@ services:
       OTEL_SERVICE_NAME: ${OTEL_SERVICE_NAME:-iris-default}
       HERMES_PROFILE: ${HERMES_PROFILE:-default}
       IRIS_TENANT: ${IRIS_TENANT:-}
+      # V2 Phase 6 — audit log Postgres connection. Uses the audit_app role
+      # which has INSERT-only privileges; UPDATE/DELETE are blocked.
+      # Password comes from .env (AUDIT_APP_PASSWORD); never inlined here.
+      AUDIT_DB_HOST: ${AUDIT_DB_HOST:-audit-db}
+      AUDIT_DB_PORT: ${AUDIT_DB_PORT:-5432}
+      AUDIT_DB_NAME: ${AUDIT_DB_NAME:-audit}
+      AUDIT_DB_USER: ${AUDIT_DB_USER:-audit_app}
+      AUDIT_APP_PASSWORD: ${AUDIT_APP_PASSWORD}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     networks:

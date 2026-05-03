@@ -1,0 +1,42 @@
+# V2 Plane 1 — audit log Postgres.
+#
+# DISTINCT from /opt/data/iris-events.db (the operational event log):
+#   event log = high-volume, fast, ephemeral-friendly, in SQLite WAL
+#   audit log = compliance-grade, append-only, retention-policy-controlled,
+#               in Postgres with REVOKE UPDATE/DELETE
+#
+# The event log is the agent's working memory of "what happened recently."
+# The audit log is the compliance record of "what happened ever," kept
+# 90 days for personal mode, 3 years (SOC2) or 7 years (HIPAA) for corp.
+#
+# Schema in audit/schema.sql. Emitter is iris/hooks/audit_emit.py — wired
+# as a post_tool_call hook in Hermes config.
+
+services:
+  audit-db:
+    image: postgres:16
+    container_name: audit-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: audit
+      POSTGRES_USER: audit
+      POSTGRES_PASSWORD: ${AUDIT_DB_PASSWORD}
+      # Passed through to init-roles.sh which sets the per-role passwords.
+      AUDIT_APP_PASSWORD: ${AUDIT_APP_PASSWORD}
+      AUDIT_READER_PASSWORD: ${AUDIT_READER_PASSWORD}
+      POSTGRES_INITDB_ARGS: "--auth-host=scram-sha-256"
+    volumes:
+      - audit_postgres_data:/var/lib/postgresql/data
+      - ./schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+      - ./init-roles.sh:/docker-entrypoint-initdb.d/02-init-roles.sh:ro
+    networks:
+      - backend
+      - data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U audit -d audit"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  audit_postgres_data:
