@@ -1,0 +1,2 @@
+# Global npm packages Iris has learned to need.
+# One package per line (with optional @version). Comments with # are ignored.

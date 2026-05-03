@@ -1,0 +1,6 @@
+# Debian/Ubuntu packages Iris has learned to need.
+# One package per line. Comments with # are ignored.
+# Consumed by:
+#   - Dockerfile (baked at image build)
+#   - entrypoint (idempotent install on every boot)
+#   - iris-learn wrapper (runtime install + append here)

@@ -44,6 +44,7 @@ PROTECTED=(
     '^iris/iris-bridge-entrypoint\.sh$'
     '^iris/compose\.yaml$'
     '^iris/hooks/'
+    '^iris/bin/'
     '^claude-cli/Dockerfile$'
     '^claude-cli/compose\.yaml$'
     '^claude-cli/entrypoint\.sh$'

@@ -1,0 +1,158 @@
+#!/usr/bin/env bash
+# iris-learn — atomically install a package AND record it in the learning
+# manifest, so the install survives container recreate and image rebuild.
+#
+# Usage: iris-learn <ecosystem> <package> [reason]
+#   ecosystem: apt | python | npm
+#
+# Three actions, in order. If any fails, later steps are skipped and Iris
+# is told what state things are in.
+#
+#   1. Install the package now (apt-get / pip into Hermes's venv / npm -g).
+#   2. Append the package to /repo/iris/iris-learned/<ecosystem>.txt
+#      (idempotent — won't add duplicates) and append a rationale entry.
+#   3. Commit the manifest change on an iris-self/learn-<pkg> branch so
+#      `make iris-review` surfaces it for human approval.
+#
+# Branch hygiene: a "stash dance" preserves whatever the user had checked
+# out in /repo before this script ran, so iris-learn never disturbs the
+# user's working state on the host.
+
+set -euo pipefail
+
+ECO="${1:-}"
+PKG="${2:-}"
+REASON="${3:-no reason given}"
+
+if [ -z "$ECO" ] || [ -z "$PKG" ]; then
+    cat >&2 <<EOF
+usage: iris-learn <apt|python|npm> <package> [reason]
+
+  apt     Debian/Ubuntu system package (uses narrow-scoped sudo)
+  python  pip-installable package (lands in /opt/hermes/.venv)
+  npm     global npm package (lands in ~/.local/lib/node_modules)
+
+Reason should be one short sentence — it goes into the learning journal
+and helps future review understand why this package is in the manifest.
+EOF
+    exit 64
+fi
+
+case "$ECO" in
+    apt|python|npm) ;;
+    *) echo "iris-learn: unknown ecosystem '$ECO' (use apt|python|npm)" >&2; exit 64 ;;
+esac
+
+REPO="${IRIS_REPO_ROOT:-/repo}"
+LEARN_DIR="$REPO/iris/iris-learned"
+
+if [ ! -d "$LEARN_DIR" ]; then
+    echo "iris-learn: manifest dir missing at $LEARN_DIR" >&2
+    echo "  (is /repo bind-mounted? are you running this inside iris-gateway?)" >&2
+    exit 1
+fi
+
+# ─── Step 1: install now ────────────────────────────────────────────────────
+
+echo "→ installing $ECO $PKG"
+case "$ECO" in
+    apt)
+        sudo apt-get update -qq
+        sudo apt-get install -y --no-install-recommends "$PKG"
+        ;;
+    python)
+        # Install into Hermes's venv so Iris can `import` it on the next turn.
+        # User-site (~/.local) wouldn't be picked up by the venv's isolated
+        # python. Hermes ships uv (not pip) in the venv, so we use uv directly
+        # and target the venv's interpreter explicitly.
+        uv pip install --quiet --python /opt/hermes/.venv/bin/python "$PKG"
+        ;;
+    npm)
+        # Configure user prefix once so `npm install -g` lands in ~/.local
+        # instead of /usr/lib (which would need sudo).
+        npm config set prefix "$HOME/.local" --location=user >/dev/null
+        npm install -g --silent "$PKG"
+        ;;
+esac
+
+# ─── Step 2: update manifest + rationale ────────────────────────────────────
+# Done on an iris-self branch via a stash dance so the user's current branch
+# and working tree are untouched.
+
+cd "$REPO"
+
+ORIG_BRANCH=$(git rev-parse --abbrev-ref HEAD)
+STASH_REF=""
+if [ -n "$(git status --porcelain)" ]; then
+    STASH_MSG="iris-learn-prestash-$(date -u +%Y%m%dT%H%M%SZ)"
+    git stash push --include-untracked --quiet -m "$STASH_MSG"
+    STASH_REF="$STASH_MSG"
+fi
+
+# Branch name: sanitize package spec to filesystem-safe form
+SAFE_PKG=$(printf '%s' "$PKG" | tr '/@=<>!~*' '------' | tr -cd 'a-zA-Z0-9.-')
+BRANCH="iris-self/learn-${ECO}-${SAFE_PKG}"
+
+restore_state() {
+    git checkout --quiet "$ORIG_BRANCH" 2>/dev/null || true
+    if [ -n "$STASH_REF" ]; then
+        git stash pop --quiet || echo "iris-learn: WARNING — could not pop stash '$STASH_REF', recover with 'git stash list'" >&2
+    fi
+}
+trap restore_state EXIT
+
+if git rev-parse --verify --quiet "$BRANCH" >/dev/null; then
+    git checkout --quiet "$BRANCH"
+else
+    git checkout --quiet -b "$BRANCH"
+fi
+
+# Append to <eco>.txt (idempotent)
+MANIFEST="$LEARN_DIR/$ECO.txt"
+if grep -qxF "$PKG" "$MANIFEST" 2>/dev/null; then
+    echo "  (already in $ECO.txt — recording rationale only)"
+    MANIFEST_CHANGED=0
+else
+    printf '%s\n' "$PKG" >> "$MANIFEST"
+    MANIFEST_CHANGED=1
+fi
+
+# Append rationale (always — even repeat asks are signal)
+TIMESTAMP=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+{
+    echo ""
+    echo "## $TIMESTAMP — $ECO $PKG"
+    echo "**Trigger:** $REASON"
+} >> "$LEARN_DIR/rationale.md"
+
+# Commit on the iris-self branch
+git add "iris/iris-learned/"
+COMMIT_MSG="iris-self: learn $ECO $PKG
+
+Reason: $REASON
+
+Installed at runtime via iris-learn and recorded in iris/iris-learned/
+so a future image rebuild bakes it into the image."
+
+if git diff --cached --quiet; then
+    echo "  (nothing to commit — manifest unchanged)"
+else
+    if git commit --quiet -m "$COMMIT_MSG"; then
+        echo "✓ committed on $BRANCH"
+    else
+        echo "iris-learn: WARNING — install succeeded but commit failed." >&2
+        echo "  Manifest is updated on disk; please commit by hand." >&2
+        # leave trap to restore branch
+        exit 1
+    fi
+fi
+
+# Disarm trap and explicitly restore state on success path so we don't double-restore
+trap - EXIT
+restore_state
+
+echo ""
+echo "✓ learned $ECO $PKG"
+[ "$MANIFEST_CHANGED" -eq 1 ] && echo "  manifest: iris/iris-learned/$ECO.txt"
+echo "  branch:   $BRANCH"
+echo "  review:   make iris-review"

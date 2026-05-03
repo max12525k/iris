@@ -2,8 +2,16 @@ FROM iris:local
 
 USER root
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      python3-requests docker.io ca-certificates \
+      python3-requests docker.io ca-certificates sudo \
   && rm -rf /var/lib/apt/lists/*
+
+# Narrow sudo grant for the `hermes` user: apt-get update + apt-get install only.
+# Lets `iris-learn apt <pkg>` install runtime packages into the live container
+# without granting general root. apt-get remove/upgrade/purge are NOT allowed.
+RUN echo 'hermes ALL=(root) NOPASSWD: /usr/bin/apt-get update, /usr/bin/apt-get install *' \
+      > /etc/sudoers.d/iris-apt \
+ && chmod 0440 /etc/sudoers.d/iris-apt \
+ && visudo -cf /etc/sudoers.d/iris-apt
 
 # The dashboard's --tui flag does runtime `npm install` in /opt/hermes/ui-tui.
 # Upstream entrypoint remaps hermes UID/GID at runtime (build-default 10000 →
@@ -15,9 +23,38 @@ RUN chmod +x /usr/local/bin/iris-bridge-entrypoint
 
 COPY presidio-mask.py /usr/local/bin/presidio-mask
 COPY claude-wrapper.sh /usr/local/bin/claude
+COPY bin/iris-learn /usr/local/bin/iris-learn
 RUN mkdir -p /opt/iris-hooks
 COPY hooks/pre_tool_call.sh /opt/iris-hooks/pre_tool_call.sh
-RUN chmod +x /usr/local/bin/presidio-mask /usr/local/bin/claude /opt/iris-hooks/pre_tool_call.sh
+RUN chmod +x /usr/local/bin/presidio-mask /usr/local/bin/claude \
+              /usr/local/bin/iris-learn /opt/iris-hooks/pre_tool_call.sh
+
+# ─── Bake learned packages into the image ──────────────────────────────────
+# The manifests at iris/iris-learned/* are the canonical record of every
+# package Iris has acquired. At image build time we install them all, so a
+# fresh container starts already-equipped. The same files are also re-read
+# by the entrypoint on every boot for force-recreate idempotency.
+COPY iris-learned/ /opt/iris-learned/
+RUN set -e; \
+    if [ -s /opt/iris-learned/apt.txt ]; then \
+        APT_PKGS=$(grep -vE '^\s*#|^\s*$' /opt/iris-learned/apt.txt | tr '\n' ' '); \
+        if [ -n "$APT_PKGS" ]; then \
+            apt-get update && \
+            apt-get install -y --no-install-recommends $APT_PKGS && \
+            rm -rf /var/lib/apt/lists/*; \
+        fi; \
+    fi; \
+    if [ -s /opt/iris-learned/python.txt ]; then \
+        if grep -qvE '^\s*#|^\s*$' /opt/iris-learned/python.txt; then \
+            uv pip install --python /opt/hermes/.venv/bin/python -r /opt/iris-learned/python.txt; \
+        fi; \
+    fi; \
+    if [ -s /opt/iris-learned/npm.txt ]; then \
+        NPM_PKGS=$(grep -vE '^\s*#|^\s*$' /opt/iris-learned/npm.txt | tr '\n' ' '); \
+        if [ -n "$NPM_PKGS" ] && command -v npm >/dev/null; then \
+            npm install -g --silent $NPM_PKGS; \
+        fi; \
+    fi
 
 # Don't switch USER — wrapper entrypoint expects to start as root to chown ui-tui
 # + /opt/data, then upstream entrypoint drops privileges to `hermes` itself.

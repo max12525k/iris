@@ -1,0 +1,3 @@
+# Python packages Iris has learned to need.
+# pip requirements format — version pins and comments OK.
+# Installed into Hermes's venv at /opt/hermes/.venv.
