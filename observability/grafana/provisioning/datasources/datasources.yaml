@@ -1,0 +1,35 @@
+# Auto-provisioned Grafana datasources (loaded at startup; immutable in UI).
+#
+# Two sources:
+#   prometheus — scrapes existing iris stack (LiteLLM, Hermes /metrics)
+#                AND our new otel-collector at :8889
+#   loki       — receives logs from promtail + structured events from
+#                otel-collector
+
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+    editable: false
+    jsonData:
+      timeInterval: 15s
+      httpMethod: POST
+
+  - name: Loki
+    type: loki
+    access: proxy
+    url: http://loki:3100
+    editable: false
+    jsonData:
+      timeout: 60
+      maxLines: 5000
+      derivedFields:
+        # Click on a trace_id in any log line → jumps to all logs with that ID.
+        - datasourceUid: loki_uid
+          matcherRegex: 'trace_id["=:]+([a-f0-9]+)'
+          name: trace_id
+          url: '$${__value.raw}'

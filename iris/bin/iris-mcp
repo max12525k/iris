@@ -164,6 +164,8 @@ PY
 
 # ─── Apply via reconcile (or hermes mcp rm for the rm path) ─────────────────
 
+_otel_emit --category mcp --action "$ACTION" --subject "$NAME" --outcome started 2>/dev/null || true
+
 case "$ACTION" in
     add)
         echo "→ adding MCP server '$NAME'"
@@ -211,6 +213,9 @@ fi
 
 trap - EXIT
 restore_state
+
+_otel_emit --category mcp --action "$ACTION" --subject "$NAME" --outcome ok \
+           --attr branch="$BRANCH" 2>/dev/null || true
 
 echo ""
 echo "✓ MCP server '$NAME' ${ACTION}ed"

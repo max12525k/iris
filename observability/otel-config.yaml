@@ -1,0 +1,79 @@
+# OpenTelemetry Collector pipeline.
+#
+# Receives traces/metrics/logs over OTLP (gRPC 4317, HTTP 4318) from:
+#   - iris-* wrappers (via _otel_emit.py)
+#   - Hermes hooks (pre/post tool call) — wired in Phase 1.4
+#   - any future agent code with an OTel SDK
+#
+# Fans out:
+#   - traces → exposed as Prometheus metrics (span counts/durations) at :8889
+#             AND as Loki logs (one log line per span for easy text search)
+#   - metrics → Prometheus exporter at :8889 (existing prometheus scrapes us)
+#   - logs   → Loki at http://loki:3100
+
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  batch:
+    timeout: 5s
+    send_batch_size: 512
+  # Add tenant + profile attributes from environment context if present.
+  # (Phase 7 multi-tenant uses these to scope queries.)
+  attributes/enrich:
+    actions:
+      - key: stack
+        value: iris-v2
+        action: insert
+
+exporters:
+  # Span counts and durations as Prometheus metrics.
+  # Existing prometheus container scrapes otel-collector:8889/metrics.
+  prometheus:
+    endpoint: 0.0.0.0:8889
+    namespace: iris
+    send_timestamps: true
+    metric_expiration: 5m
+    enable_open_metrics: true
+
+  # Push logs (and span events flattened to logs) into Loki.
+  otlphttp/loki:
+    endpoint: http://loki:3100/otlp
+    tls:
+      insecure: true
+
+  # Convert traces to log lines for easy search until we add Tempo/Jaeger
+  # in Phase 6. Each span becomes one log entry tagged with trace_id.
+  # `verbosity: detailed` includes span attributes (subject, outcome, etc.)
+  # so the Loki search "find all install events" works without a real
+  # trace backend.
+  debug/spans:
+    verbosity: detailed
+
+service:
+  telemetry:
+    logs:
+      level: info
+  pipelines:
+    # Traces → debug exporter only (prints span summary to stdout).
+    # Promtail picks up the otel-collector container's logs and ships them
+    # to Loki, so trace_id search in Grafana still works. Phase 6 swaps
+    # the debug exporter for Tempo (real trace storage + UI).
+    traces:
+      receivers: [otlp]
+      processors: [batch, attributes/enrich]
+      exporters: [debug/spans]
+    metrics:
+      receivers: [otlp]
+      processors: [batch, attributes/enrich]
+      exporters: [prometheus]
+    # Logs → Loki via OTLP HTTP. Loki natively accepts OTLP logs (unlike traces).
+    logs:
+      receivers: [otlp]
+      processors: [batch, attributes/enrich]
+      exporters: [otlphttp/loki]

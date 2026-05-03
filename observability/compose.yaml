@@ -1,0 +1,83 @@
+# observability/compose.yaml — Plane 1 of V2 (V2_INSTALL.md §4)
+#
+# Adds 4 services that cut through everything below them:
+#   otel-collector  — receives push-based traces/metrics/logs from iris-* wrappers
+#                     and Hermes hooks; fans out to prometheus + loki
+#   loki            — log storage; tailed via promtail (raw container logs) AND
+#                     written to via OTel collector (structured wrapper events)
+#   promtail        — tails docker container logs into loki
+#   grafana         — single dashboard surface over prometheus + loki
+#
+# All four join the existing `frontend` (host loopback) + `backend` (internal)
+# networks defined in the top-level compose.yaml. The existing prometheus
+# container (in iris/compose.yaml peers) keeps its current scrape configs;
+# the OTel collector becomes a NEW push target that prometheus also scrapes.
+
+services:
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.106.1
+    container_name: otel-collector
+    restart: unless-stopped
+    command: ["--config=/etc/otel-collector-config.yaml"]
+    volumes:
+      - ./otel-config.yaml:/etc/otel-collector-config.yaml:ro
+    networks:
+      - frontend  # so wrappers/Hermes hooks on iris-* containers can reach 4317/4318
+      - backend
+    # No host port published — OTLP receivers are container-internal only.
+
+  loki:
+    image: grafana/loki:3.1.0
+    container_name: loki
+    restart: unless-stopped
+    command: -config.file=/etc/loki/local-config.yaml
+    volumes:
+      - loki_data:/loki
+      - ./loki-config.yaml:/etc/loki/local-config.yaml:ro
+    networks:
+      - backend
+    # Loki HTTP API (3100) is backend-only; Grafana queries it cross-network.
+
+  promtail:
+    image: grafana/promtail:3.1.0
+    container_name: promtail
+    restart: unless-stopped
+    command: -config.file=/etc/promtail/config.yaml
+    volumes:
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./promtail-config.yaml:/etc/promtail/config.yaml:ro
+    networks:
+      - backend
+    depends_on:
+      - loki
+
+  grafana:
+    image: grafana/grafana:11.2.0
+    container_name: grafana
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:3000:3000"
+    environment:
+      # Personal-mode defaults: anonymous Viewer access from host loopback only.
+      # Corporate (Phase 7) replaces this with OIDC via oauth2-proxy.
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+      GF_AUTH_BASIC_ENABLED: "true"
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+      # Auto-load datasources + dashboards from /etc/grafana/provisioning.
+      GF_PATHS_PROVISIONING: /etc/grafana/provisioning
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+    networks:
+      - frontend  # host loopback for browser access
+      - backend   # for prometheus + loki queries
+    depends_on:
+      - loki
+
+volumes:
+  loki_data:
+  grafana_data:

@@ -5,6 +5,7 @@ include:
   - ./litellm/compose.yaml
   - ./honcho/compose.yaml
   - ./claude-cli/compose.yaml
+  - ./observability/compose.yaml      # V2 Plane 1: OTel + Loki + Promtail + Grafana
 
 networks:
   frontend:

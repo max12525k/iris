@@ -65,6 +65,9 @@ done
 # Mutates /opt/data state (skills dir + internal index). We don't touch /repo
 # at all in this step, so it's safe to do before the branch switch.
 
+_otel_emit --category skill --action "$ACTION" --subject "$NAME" --outcome started \
+           --attr force="$FORCE_FLAG" 2>/dev/null || true
+
 case "$ACTION" in
     install)
         echo "→ installing skill '$NAME' via hermes"
@@ -81,6 +84,8 @@ case "$ACTION" in
         # Treat both as wrapper-level failures so we don't commit a no-op branch.
         if printf '%s' "$OUT" | grep -qE "Installation cancelled|^Error: "; then
             echo "iris-skill: install of '$NAME' failed — aborting" >&2
+            _otel_emit --category skill --action install --subject "$NAME" \
+                       --outcome error --attr error_class=hermes_install_aborted 2>/dev/null || true
             exit 1
         fi
         ;;
@@ -172,6 +177,9 @@ fi
 
 trap - EXIT
 restore_state
+
+_otel_emit --category skill --action "$ACTION" --subject "$NAME" --outcome ok \
+           --attr branch="$BRANCH" 2>/dev/null || true
 
 echo ""
 echo "✓ skill '$NAME' ${ACTION}ed"

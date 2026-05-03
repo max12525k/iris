@@ -5,6 +5,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       python3-requests docker.io ca-certificates sudo \
   && rm -rf /var/lib/apt/lists/*
 
+# V2 Plane 1 — OpenTelemetry SDK + OTLP exporter for span emission from
+# iris-* wrappers. Installed into Hermes's venv so the wrappers' Python
+# scripts can import it (their shebang points at /opt/hermes/.venv/bin/python).
+# Pinned versions match the otel-collector contrib 0.106.x compatibility.
+RUN uv pip install --python /opt/hermes/.venv/bin/python \
+      'opentelemetry-api>=1.27,<2' \
+      'opentelemetry-sdk>=1.27,<2' \
+      'opentelemetry-exporter-otlp-proto-grpc>=1.27,<2'
+
 # Narrow sudo grant for the `hermes` user: apt-get update + apt-get install only.
 # Lets `iris-learn apt <pkg>` install runtime packages into the live container
 # without granting general root. apt-get remove/upgrade/purge are NOT allowed.
@@ -29,12 +38,14 @@ COPY bin/iris-cron-reconcile.py /usr/local/bin/iris-cron-reconcile
 COPY bin/iris-skill /usr/local/bin/iris-skill
 COPY bin/iris-mcp /usr/local/bin/iris-mcp
 COPY bin/iris-mcp-reconcile.py /usr/local/bin/iris-mcp-reconcile
+COPY bin/_otel_emit.py /usr/local/bin/_otel_emit
 RUN mkdir -p /opt/iris-hooks
 COPY hooks/pre_tool_call.sh /opt/iris-hooks/pre_tool_call.sh
 RUN chmod +x /usr/local/bin/presidio-mask /usr/local/bin/claude \
               /usr/local/bin/iris-learn /usr/local/bin/iris-cron \
               /usr/local/bin/iris-cron-reconcile /usr/local/bin/iris-skill \
               /usr/local/bin/iris-mcp /usr/local/bin/iris-mcp-reconcile \
+              /usr/local/bin/_otel_emit \
               /opt/iris-hooks/pre_tool_call.sh
 
 # ─── Bake learned packages into the image ──────────────────────────────────

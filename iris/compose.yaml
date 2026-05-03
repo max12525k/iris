@@ -39,6 +39,11 @@ services:
       # Iris bot git identity (used when Iris commits to iris-proposed/* branches)
       IRIS_BOT_NAME: ${IRIS_BOT_NAME:-iris-bot}
       IRIS_BOT_EMAIL: ${IRIS_BOT_EMAIL:-iris-bot@local}
+      # V2 Plane 1 — every iris-* wrapper invocation emits an OTel span here.
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-http://otel-collector:4317}
+      OTEL_SERVICE_NAME: ${OTEL_SERVICE_NAME:-iris-default}
+      HERMES_PROFILE: ${HERMES_PROFILE:-default}
+      IRIS_TENANT: ${IRIS_TENANT:-}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     networks:

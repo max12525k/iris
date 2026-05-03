@@ -55,25 +55,33 @@ fi
 # ─── Step 1: install now ────────────────────────────────────────────────────
 
 echo "→ installing $ECO $PKG"
+_otel_emit --category package --action install --subject "$ECO:$PKG" \
+           --outcome started --attr eco="$ECO" --attr reason="$REASON" 2>/dev/null || true
+INSTALL_RC=0
 case "$ECO" in
     apt)
         sudo apt-get update -qq
-        sudo apt-get install -y --no-install-recommends "$PKG"
+        sudo apt-get install -y --no-install-recommends "$PKG" || INSTALL_RC=$?
         ;;
     python)
         # Install into Hermes's venv so Iris can `import` it on the next turn.
         # User-site (~/.local) wouldn't be picked up by the venv's isolated
         # python. Hermes ships uv (not pip) in the venv, so we use uv directly
         # and target the venv's interpreter explicitly.
-        uv pip install --quiet --python /opt/hermes/.venv/bin/python "$PKG"
+        uv pip install --quiet --python /opt/hermes/.venv/bin/python "$PKG" || INSTALL_RC=$?
         ;;
     npm)
         # Configure user prefix once so `npm install -g` lands in ~/.local
         # instead of /usr/lib (which would need sudo).
         npm config set prefix "$HOME/.local" --location=user >/dev/null
-        npm install -g --silent "$PKG"
+        npm install -g --silent "$PKG" || INSTALL_RC=$?
         ;;
 esac
+if [ "$INSTALL_RC" -ne 0 ]; then
+    _otel_emit --category package --action install --subject "$ECO:$PKG" \
+               --outcome error --attr eco="$ECO" --attr exit_code="$INSTALL_RC" 2>/dev/null || true
+    exit "$INSTALL_RC"
+fi
 
 # ─── Step 2: update manifest + rationale ────────────────────────────────────
 # Done on an iris-self branch via a stash dance so the user's current branch
@@ -157,6 +165,10 @@ fi
 # Disarm trap and explicitly restore state on success path so we don't double-restore
 trap - EXIT
 restore_state
+
+_otel_emit --category package --action install --subject "$ECO:$PKG" \
+           --outcome ok --attr eco="$ECO" --attr branch="$BRANCH" \
+           --attr manifest_changed="$MANIFEST_CHANGED" 2>/dev/null || true
 
 echo ""
 echo "✓ learned $ECO $PKG"

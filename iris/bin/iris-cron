@@ -139,6 +139,9 @@ case "$ACTION" in
     rm)  echo "→ removing cron job 'iris.$NAME'";;
 esac
 
+_otel_emit --category cron --action "$ACTION" --subject "$NAME" --outcome started \
+           --attr schedule="$SCHEDULE" --attr deliver="$DELIVER" 2>/dev/null || true
+
 # ─── Stash dance + branch switch BEFORE manifest write ──────────────────────
 # Order matters: writing the manifest first and then stashing would move our
 # change into the stash, leaving the new branch's working tree without it.
@@ -220,6 +223,9 @@ fi
 
 trap - EXIT
 restore_state
+
+_otel_emit --category cron --action "$ACTION" --subject "$NAME" --outcome ok \
+           --attr branch="$BRANCH" 2>/dev/null || true
 
 echo ""
 echo "✓ cron job '$NAME' ${ACTION}ed"

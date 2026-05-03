@@ -1,0 +1,52 @@
+# Loki local-mode config (single binary, no clustering).
+# Defaults work for everything except the line-length cap, which the
+# upstream LiteLLM container blows past with multi-megabyte JSON bodies.
+
+auth_enabled: false
+
+server:
+  http_listen_port: 3100
+  grpc_listen_port: 9096
+
+common:
+  instance_addr: 127.0.0.1
+  path_prefix: /loki
+  storage:
+    filesystem:
+      chunks_directory: /loki/chunks
+      rules_directory: /loki/rules
+  replication_factor: 1
+  ring:
+    kvstore:
+      store: inmemory
+
+schema_config:
+  configs:
+    - from: 2024-01-01
+      store: tsdb
+      object_store: filesystem
+      schema: v13
+      index:
+        prefix: index_
+        period: 24h
+
+limits_config:
+  # LiteLLM dumps multi-MB JSON bodies on prompt-cache hits.
+  # 4MB cap is comfortable for our scale; bump again if you see ingest errors.
+  max_line_size: 4194304
+  max_line_size_truncate: true
+  reject_old_samples: true
+  reject_old_samples_max_age: 168h
+  allow_structured_metadata: true
+
+ruler:
+  alertmanager_url: http://localhost:9093
+
+# OTLP receiver — accepts logs/spans pushed by otel-collector via the
+# /otlp endpoint. Required for the otelhttp/loki exporter pipeline.
+distributor:
+  otlp_config:
+    default_resource_attributes_as_index_labels:
+      - service.name
+      - service.namespace
+      - container.name
