@@ -1,0 +1,21 @@
+# Iris-managed scheduled jobs.
+#
+# Jobs listed here are reconciled into Hermes's cron system at every boot,
+# so they survive force-recreate AND fresh-clone. Names are prefixed with
+# "iris." in Hermes — manual jobs created via `hermes cron create` (without
+# the iris. prefix) are not touched by reconcile.
+#
+# Add via:    iris-cron add "<schedule>" "<prompt>" --name <name> [opts]
+# Remove via: iris-cron rm <name>
+# Inspect:    iris-cron list   (or `hermes cron list` for raw view)
+#
+# Schema for each job (fields in priority order):
+#   name:     short slug — gets prefixed to "iris.<name>" in Hermes
+#   schedule: cron expression ("0 9 * * 1") or interval ("every 24h", "30m")
+#   prompt:   the task instruction injected when the job fires
+#   deliver:  optional delivery channel: origin, local, telegram, discord,
+#             signal, or "platform:chat_id"
+#   skills:   optional list of skill names attached to this job
+#   workdir:  optional absolute path to use as cwd (loads AGENTS.md/CLAUDE.md)
+
+jobs: []

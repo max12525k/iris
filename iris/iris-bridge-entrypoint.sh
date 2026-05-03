@@ -64,6 +64,29 @@ if [ "$(id -u)" = "0" ]; then
     chown -R "${HERMES_UID:-10000}:${HERMES_GID:-10000}" /opt/hermes/.venv 2>/dev/null || true
     [ -d /home/hermes/.local ] && \
       chown -R "${HERMES_UID:-10000}:${HERMES_GID:-10000}" /home/hermes/.local 2>/dev/null || true
+
+    # ─── Cron reconcile from iris/iris-config/cron.yaml ─────────────────────
+    # Hermes's cron state lives in SQLite at /opt/data/state.db, not in plain
+    # config — so we can't just COPY a manifest into the image. Instead, the
+    # iris-cron-reconcile helper reads /repo/iris/iris-config/cron.yaml, wipes
+    # any pre-existing iris.* jobs in Hermes, and recreates them from the
+    # manifest. Same "repo as source of truth" property as packages.
+    #
+    # Must run as the eventual hermes UID so writes land in /opt/data/state.db
+    # with correct ownership. We mirror upstream's usermod + /opt/data chown
+    # ourselves (otherwise cron reconcile would write as the wrong UID) and
+    # let upstream re-run the same logic harmlessly (it's idempotent).
+    if [ -x /usr/local/bin/iris-cron-reconcile ] && [ -f /repo/iris/iris-config/cron.yaml ]; then
+        if [ -n "${HERMES_UID:-}" ] && [ "$HERMES_UID" != "$(id -u hermes)" ]; then
+            usermod -u "$HERMES_UID" hermes
+        fi
+        if [ -n "${HERMES_GID:-}" ] && [ "$HERMES_GID" != "$(id -g hermes)" ]; then
+            groupmod -o -g "$HERMES_GID" hermes 2>/dev/null || true
+        fi
+        chown -R hermes:"$(id -gn hermes)" /opt/data 2>/dev/null || true
+        gosu hermes /usr/local/bin/iris-cron-reconcile /repo/iris/iris-config/cron.yaml \
+          || echo "iris-reconcile: WARNING — cron reconcile had issues; check /repo/iris/iris-config/cron.yaml" >&2
+    fi
 fi
 
 exec /opt/hermes/docker/entrypoint.sh "$@"
