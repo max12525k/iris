@@ -1,0 +1,121 @@
+# V2 Plane 2 — multi-profile fleet gateways.
+#
+# The default `iris-gateway` (in iris/compose.yaml) is the "persona" profile.
+# This file adds three more profile gateways: researcher, coder, ops.
+#
+# Each is a separate Hermes process with its own ~/.hermes/profiles/<name>/
+# state directory (per-profile volume), its own LiteLLM virtual key (per-
+# profile cost attribution), and its own optional Telegram bot token.
+#
+# These services use the `profiles:` keyword so they DON'T auto-start with
+# `make dev`. Activate any of them with:
+#   docker compose --profile researcher up -d
+#   docker compose --profile coder    up -d
+#   docker compose --profile ops      up -d
+#   docker compose --profile fleet    up -d   # all three
+#
+# Per the upstream Hermes warning: never run two gateway containers against
+# the same data dir. Each profile here gets its OWN named volume.
+#
+# Per-profile virtual keys: run `bash scripts/v2-mint-profile-keys.sh` once
+# after first activation; it mints {RESEARCHER,CODER,OPS}_VIRTUAL_KEY into
+# .env and renders per-profile config.yaml from the per-profile SOUL.md.
+
+services:
+  iris-researcher:
+    image: iris-bridge:local
+    container_name: iris-researcher
+    restart: unless-stopped
+    profiles: ["researcher", "fleet"]
+    volumes:
+      - data_researcher:/opt/data
+      - ${HOME}/iris-workspace:/workspace
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ${IRIS_REPO:-${HOME}/personal_assistant/iris}:/repo:rw
+    environment:
+      HERMES_UID: ${HERMES_UID:-10000}
+      HERMES_GID: ${HERMES_GID:-10000}
+      HERMES_PROFILE: researcher
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-http://otel-collector:4317}
+      OTEL_SERVICE_NAME: iris-researcher
+      IRIS_TENANT: ${IRIS_TENANT:-}
+      PRESIDIO_ANALYZER_API_BASE: http://presidio-analyzer:3000
+      PRESIDIO_ANONYMIZER_API_BASE: http://presidio-anonymizer:3000
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN_RESEARCHER:-}
+      TELEGRAM_ALLOWED_USERS: ${TELEGRAM_ALLOWED_USERS:-}
+      TELEGRAM_HOME_CHANNEL: ${TELEGRAM_HOME_CHANNEL_RESEARCHER:-}
+      IRIS_BOT_NAME: iris-researcher-bot
+      IRIS_BOT_EMAIL: iris-researcher-bot@local
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    networks:
+      - frontend
+      - backend
+    command: ["gateway", "run"]
+
+  iris-coder:
+    image: iris-bridge:local
+    container_name: iris-coder
+    restart: unless-stopped
+    profiles: ["coder", "fleet"]
+    volumes:
+      - data_coder:/opt/data
+      - ${HOME}/iris-workspace:/workspace
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ${IRIS_REPO:-${HOME}/personal_assistant/iris}:/repo:rw
+    environment:
+      HERMES_UID: ${HERMES_UID:-10000}
+      HERMES_GID: ${HERMES_GID:-10000}
+      HERMES_PROFILE: coder
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-http://otel-collector:4317}
+      OTEL_SERVICE_NAME: iris-coder
+      IRIS_TENANT: ${IRIS_TENANT:-}
+      PRESIDIO_ANALYZER_API_BASE: http://presidio-analyzer:3000
+      PRESIDIO_ANONYMIZER_API_BASE: http://presidio-anonymizer:3000
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN_CODER:-}
+      TELEGRAM_ALLOWED_USERS: ${TELEGRAM_ALLOWED_USERS:-}
+      TELEGRAM_HOME_CHANNEL: ${TELEGRAM_HOME_CHANNEL_CODER:-}
+      IRIS_BOT_NAME: iris-coder-bot
+      IRIS_BOT_EMAIL: iris-coder-bot@local
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    networks:
+      - frontend
+      - backend
+    command: ["gateway", "run"]
+
+  iris-ops:
+    image: iris-bridge:local
+    container_name: iris-ops
+    restart: unless-stopped
+    profiles: ["ops", "fleet"]
+    volumes:
+      - data_ops:/opt/data
+      - ${HOME}/iris-workspace:/workspace
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ${IRIS_REPO:-${HOME}/personal_assistant/iris}:/repo:rw
+    environment:
+      HERMES_UID: ${HERMES_UID:-10000}
+      HERMES_GID: ${HERMES_GID:-10000}
+      HERMES_PROFILE: ops
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-http://otel-collector:4317}
+      OTEL_SERVICE_NAME: iris-ops
+      IRIS_TENANT: ${IRIS_TENANT:-}
+      PRESIDIO_ANALYZER_API_BASE: http://presidio-analyzer:3000
+      PRESIDIO_ANONYMIZER_API_BASE: http://presidio-anonymizer:3000
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN_OPS:-}
+      TELEGRAM_ALLOWED_USERS: ${TELEGRAM_ALLOWED_USERS:-}
+      TELEGRAM_HOME_CHANNEL: ${TELEGRAM_HOME_CHANNEL_OPS:-}
+      IRIS_BOT_NAME: iris-ops-bot
+      IRIS_BOT_EMAIL: iris-ops-bot@local
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    networks:
+      - frontend
+      - backend
+    command: ["gateway", "run"]
+
+volumes:
+  data_researcher:
+  data_coder:
+  data_ops:

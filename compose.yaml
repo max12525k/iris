@@ -6,6 +6,7 @@ include:
   - ./honcho/compose.yaml
   - ./claude-cli/compose.yaml
   - ./observability/compose.yaml      # V2 Plane 1: OTel + Loki + Promtail + Grafana
+  - ./iris/profiles.compose.yaml      # V2 Plane 2: opt-in profile gateways (researcher/coder/ops)
 
 networks:
   frontend:
