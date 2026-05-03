@@ -93,8 +93,9 @@ Three surfaces, all sharing the same brain + memory + guardrails:
 
 For one-shot queries:
 ```bash
-docker compose exec -T iris-gateway hermes -p "your question"
+docker compose exec -T iris-gateway /opt/hermes/.venv/bin/hermes -z "your question"
 ```
+(`-z` is the prompt flag — `-p` is "profile". The full venv path is needed because the bare `hermes` isn't on the default exec PATH.)
 
 Useful slash commands once you're chatting:
 - `/model` — switch which `iris-*` route to use for this turn
