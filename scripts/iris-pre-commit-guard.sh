@@ -1,30 +1,27 @@
 #!/usr/bin/env bash
-# Iris repo pre-commit guard.
+# Iris pre-commit guard — content scan only.
 #
-# Runs on EVERY commit (regardless of author). Blocks:
+# Runs on EVERY commit. Blocks:
 #   1. Common API key / secret patterns in any staged content
-#   2. Personal identifiers (emails matching personal-name patterns,
+#   2. Personal identifiers (gmail/yahoo/outlook/icloud emails;
 #      absolute /Users/<name> paths revealing host username)
-#   3. Iris-authored commits (`iris-self:` / `iris-proposed:` prefix) that
-#      touch security-critical paths — those are human-only
-#   4. Iris-authored commits that aren't on an iris-proposed/* or
-#      iris-self/* branch — main is human-only territory
 #
-# Install via `bash scripts/install-iris-hooks.sh` after cloning the repo.
-# Override (only if you've manually reviewed): `git commit --no-verify`.
+# Iris-author / branch / protected-path policy lives in the commit-msg hook,
+# not here — pre-commit hook can't read the new commit message reliably
+# (.git/COMMIT_EDITMSG is stale from the prior commit until commit-msg runs).
+#
+# Override (only after manual review): git commit --no-verify
 
 set -euo pipefail
 
 REPO_ROOT="$(git rev-parse --show-toplevel)"
 cd "$REPO_ROOT"
 
-# Files staged for this commit (added or modified, not deleted)
 FILES=$(git diff --cached --name-only --diff-filter=ACM)
 [ -z "$FILES" ] && exit 0
 
 ERRORS=0
 
-# ─────────── Secret patterns ───────────
 SECRET_PATTERNS=(
     'AKIA[0-9A-Z]{16}|AWS access key'
     'aws_secret_access_key\s*=\s*["'"'"']?[A-Za-z0-9+/=]{40}["'"'"']?|AWS secret'
@@ -55,11 +52,6 @@ for FILE in $FILES; do
             ERRORS=$((ERRORS + 1))
         fi
     done
-done
-
-# ─────────── Personal data + absolute home paths ───────────
-for FILE in $FILES; do
-    [ -f "$FILE" ] || continue
     if grep -nE '@gmail\.com|@yahoo\.com|@outlook\.com|@icloud\.com' "$FILE" >/dev/null 2>&1; then
         LINE=$(grep -nE '@gmail|@yahoo|@outlook|@icloud' "$FILE" | head -1 | cut -d: -f1)
         echo "✗ $FILE:$LINE — personal email address (commit publicly?)"
@@ -72,58 +64,10 @@ for FILE in $FILES; do
     fi
 done
 
-# ─────────── Iris-authored commit policy ───────────
-COMMIT_MSG_FILE="${1:-.git/COMMIT_EDITMSG}"
-COMMIT_MSG=""
-[ -f "$COMMIT_MSG_FILE" ] && COMMIT_MSG=$(cat "$COMMIT_MSG_FILE")
-
-if echo "$COMMIT_MSG" | grep -qE '^iris-(self|proposed):'; then
-    # Branch check: iris-* commits must be on iris-proposed/* or iris-self/*
-    BRANCH=$(git rev-parse --abbrev-ref HEAD)
-    case "$BRANCH" in
-        iris-proposed/*|iris-self/*) ;;
-        *)
-            echo "✗ iris-authored commit on '$BRANCH' — must be on iris-proposed/* or iris-self/*"
-            ERRORS=$((ERRORS + 1))
-            ;;
-    esac
-
-    # Path check: iris-authored commits cannot touch security-critical paths
-    PROTECTED=(
-        '^compose\.yaml$'
-        '^compose\.prod\.yaml$'
-        '^compose\.override\.yaml$'
-        '^iris/Dockerfile\.iris-bridge$'
-        '^iris/iris-bridge-entrypoint\.sh$'
-        '^iris/compose\.yaml$'
-        '^iris/hooks/'
-        '^claude-cli/Dockerfile$'
-        '^claude-cli/compose\.yaml$'
-        '^claude-cli/entrypoint\.sh$'
-        '^claude-cli/.*\.(sh|py)$'
-        '^honcho/compose\.yaml$'
-        '^litellm/(compose\.yaml|config\.yaml)$'
-        '^scripts/'
-        '^env\.example$'
-        '^litellm/env\.example$'
-        '^\.gitignore$'
-    )
-    for FILE in $FILES; do
-        for PATTERN in "${PROTECTED[@]}"; do
-            if echo "$FILE" | grep -qE "$PATTERN"; then
-                echo "✗ iris-authored commit touches protected path: $FILE — that's human-only"
-                ERRORS=$((ERRORS + 1))
-                break
-            fi
-        done
-    done
-fi
-
-# ─────────── Result ───────────
 if [ "$ERRORS" -gt 0 ]; then
     echo ""
-    echo "Pre-commit guard blocked the commit ($ERRORS issue(s))."
-    echo "If you've reviewed and accept the risk, commit with: git commit --no-verify"
+    echo "Pre-commit content scan blocked the commit ($ERRORS issue(s))."
+    echo "If you've reviewed and accept the risk: git commit --no-verify"
     exit 1
 fi
 
