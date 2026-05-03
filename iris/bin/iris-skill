@@ -67,6 +67,8 @@ done
 
 _otel_emit --category skill --action "$ACTION" --subject "$NAME" --outcome started \
            --attr force="$FORCE_FLAG" 2>/dev/null || true
+_event_log --category skill --action started --subject "$NAME" \
+           --payload-key wrapper_action="$ACTION" --payload-key force="$FORCE_FLAG" 2>/dev/null || true
 
 case "$ACTION" in
     install)
@@ -96,6 +98,8 @@ case "$ACTION" in
             fi
             _otel_emit --category skill --action install --subject "$NAME" \
                        --outcome error --attr error_class="$ERR_CLASS" 2>/dev/null || true
+            _event_log --category skill --action install --subject "$NAME" --outcome error \
+                       --payload-key error_class="$ERR_CLASS" 2>/dev/null || true
             _record_lesson --category skill --subject "$NAME" \
                              --error-class "$ERR_CLASS" \
                              --lesson "$LESSON_HEAD. Next time: $LESSON_TAIL." 2>/dev/null || true
@@ -193,6 +197,8 @@ restore_state
 
 _otel_emit --category skill --action "$ACTION" --subject "$NAME" --outcome ok \
            --attr branch="$BRANCH" 2>/dev/null || true
+_event_log --category skill --action "$ACTION" --subject "$NAME" --outcome ok \
+           --payload-key branch="$BRANCH" 2>/dev/null || true
 
 echo ""
 echo "✓ skill '$NAME' ${ACTION}ed"

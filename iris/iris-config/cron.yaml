@@ -44,3 +44,16 @@ jobs:
       iris-lessons skill from /opt/data/iris-lessons.jsonl. Report the
       count of lessons rendered (one line).
     deliver: local
+
+  # V2 Plane 4 — Iris Curator. Distills the event log (24h window) into a
+  # markdown summary at /repo/iris-curator-pending/distill-YYYY-MM-DD.md.
+  # Phase 3 keeps it manual: human reads, decides, merges. Phase 3.x will
+  # add auto-PR opening via gh CLI.
+  - name: nightly-curator-distill
+    schedule: 0 5 * * *
+    prompt: |
+      Run 'iris-curator --since 24h' via your terminal tool. The command
+      writes the distill markdown to /repo/iris-curator-pending/. Report
+      the file path that was written and the total event count it found.
+    deliver: local
+    workdir: /repo

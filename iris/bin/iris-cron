@@ -141,6 +141,9 @@ esac
 
 _otel_emit --category cron --action "$ACTION" --subject "$NAME" --outcome started \
            --attr schedule="$SCHEDULE" --attr deliver="$DELIVER" 2>/dev/null || true
+_event_log --category cron --action started --subject "$NAME" \
+           --payload-key schedule="$SCHEDULE" --payload-key deliver="$DELIVER" \
+           --payload-key wrapper_action="$ACTION" 2>/dev/null || true
 
 # ─── Stash dance + branch switch BEFORE manifest write ──────────────────────
 # Order matters: writing the manifest first and then stashing would move our
@@ -226,6 +229,8 @@ restore_state
 
 _otel_emit --category cron --action "$ACTION" --subject "$NAME" --outcome ok \
            --attr branch="$BRANCH" 2>/dev/null || true
+_event_log --category cron --action "$ACTION" --subject "$NAME" --outcome ok \
+           --payload-key branch="$BRANCH" --payload-key schedule="$SCHEDULE" 2>/dev/null || true
 
 echo ""
 echo "✓ cron job '$NAME' ${ACTION}ed"

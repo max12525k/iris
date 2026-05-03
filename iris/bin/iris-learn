@@ -57,6 +57,8 @@ fi
 echo "→ installing $ECO $PKG"
 _otel_emit --category package --action install --subject "$ECO:$PKG" \
            --outcome started --attr eco="$ECO" --attr reason="$REASON" 2>/dev/null || true
+_event_log --category package --action started --subject "$ECO:$PKG" \
+           --payload-key eco="$ECO" --payload-key reason="$REASON" 2>/dev/null || true
 INSTALL_RC=0
 case "$ECO" in
     apt)
@@ -80,6 +82,8 @@ esac
 if [ "$INSTALL_RC" -ne 0 ]; then
     _otel_emit --category package --action install --subject "$ECO:$PKG" \
                --outcome error --attr eco="$ECO" --attr exit_code="$INSTALL_RC" 2>/dev/null || true
+    _event_log --category package --action install --subject "$ECO:$PKG" \
+               --outcome error --payload-key eco="$ECO" --payload-key exit_code="$INSTALL_RC" 2>/dev/null || true
     _record_lesson --category package --subject "$ECO:$PKG" \
                      --error-class "install_failed" \
                      --lesson "Package $ECO:$PKG failed to install (exit $INSTALL_RC). Verify the name is spelled correctly and exists in the $ECO registry before trying again. For python packages, 'uv pip search <name>' or pypi.org are useful; for apt, 'apt-cache search'." 2>/dev/null || true
@@ -172,6 +176,9 @@ restore_state
 _otel_emit --category package --action install --subject "$ECO:$PKG" \
            --outcome ok --attr eco="$ECO" --attr branch="$BRANCH" \
            --attr manifest_changed="$MANIFEST_CHANGED" 2>/dev/null || true
+_event_log --category package --action install --subject "$ECO:$PKG" --outcome ok \
+           --payload-key eco="$ECO" --payload-key branch="$BRANCH" \
+           --payload-key manifest_changed="$MANIFEST_CHANGED" 2>/dev/null || true
 
 echo ""
 echo "✓ learned $ECO $PKG"

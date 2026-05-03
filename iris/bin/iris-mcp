@@ -165,6 +165,8 @@ PY
 # ─── Apply via reconcile (or hermes mcp rm for the rm path) ─────────────────
 
 _otel_emit --category mcp --action "$ACTION" --subject "$NAME" --outcome started 2>/dev/null || true
+_event_log --category mcp --action started --subject "$NAME" \
+           --payload-key wrapper_action="$ACTION" 2>/dev/null || true
 
 case "$ACTION" in
     add)
@@ -216,6 +218,8 @@ restore_state
 
 _otel_emit --category mcp --action "$ACTION" --subject "$NAME" --outcome ok \
            --attr branch="$BRANCH" 2>/dev/null || true
+_event_log --category mcp --action "$ACTION" --subject "$NAME" --outcome ok \
+           --payload-key branch="$BRANCH" 2>/dev/null || true
 
 echo ""
 echo "✓ MCP server '$NAME' ${ACTION}ed"

@@ -78,3 +78,4 @@ Thumbs.db
 # ─────────── Local-only compose overrides ───────────
 compose.local.yaml
 docker-compose.local.yml
+iris-curator-pending/
