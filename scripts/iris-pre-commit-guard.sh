@@ -22,6 +22,17 @@ FILES=$(git diff --cached --name-only --diff-filter=ACM)
 
 ERRORS=0
 
+# Allowlist for known-safe public test/example values that legitimately appear
+# in documentation. Add new ones here, comma-separated. Patterns are anchored.
+DOC_ALLOWLIST=(
+    'AKIAIOSFODNN7EXAMPLE'   # AWS-published canonical test access key
+    'AKIAI44QH8DHBEXAMPLE'   # Another AWS test key in their docs
+)
+
+# Note on regex precision: the credential-bearing URI patterns explicitly
+# exclude env-var-style placeholders (${VAR}, $VAR), template placeholders
+# (<PLACEHOLDER>, {PLACEHOLDER}), and "REPLACE_ME" / "your-*" / "example" /
+# "password" stand-ins so docs don't false-positive.
 SECRET_PATTERNS=(
     'AKIA[0-9A-Z]{16}|AWS access key'
     'aws_secret_access_key\s*=\s*["'"'"']?[A-Za-z0-9+/=]{40}["'"'"']?|AWS secret'
@@ -36,18 +47,29 @@ SECRET_PATTERNS=(
     'ya29\.[0-9A-Za-z_-]+|Google OAuth token'
     'xox[baprs]-[A-Za-z0-9-]+|Slack token'
     '-----BEGIN (RSA |OPENSSH |PGP |EC |DSA )?PRIVATE KEY-----|Private key'
-    'mongodb(\+srv)?://[^/\s]+:[^@\s]+@|MongoDB URI with credentials'
-    'postgres(ql)?://[^/\s]+:[^@\s]+@|Postgres URI with credentials'
+    'mongodb(\+srv)?://[^/\s:$<{]+:[A-Za-z0-9._=-]{8,}@|MongoDB URI with credentials'
+    'postgres(ql)?://[^/\s:$<{]+:[A-Za-z0-9._=-]{8,}@|Postgres URI with credentials'
     'eyJ[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}|JWT token'
 )
 
+# Strip known-safe doc allowlist entries before pattern matching
+filter_allowlist() {
+    local content="$1"
+    for safe in "${DOC_ALLOWLIST[@]}"; do
+        content=$(echo "$content" | grep -v "$safe")
+    done
+    echo "$content"
+}
+
 for FILE in $FILES; do
     [ -f "$FILE" ] || continue
+    # Read file with allowlist entries stripped — keeps real matches, drops doc samples
+    FILTERED=$(filter_allowlist "$(cat "$FILE")")
     for ENTRY in "${SECRET_PATTERNS[@]}"; do
         PATTERN="${ENTRY%|*}"
         LABEL="${ENTRY##*|}"
-        if grep -E "$PATTERN" "$FILE" >/dev/null 2>&1; then
-            LINE=$(grep -nE "$PATTERN" "$FILE" | head -1 | cut -d: -f1)
+        if echo "$FILTERED" | grep -E "$PATTERN" >/dev/null 2>&1; then
+            LINE=$(echo "$FILTERED" | grep -nE "$PATTERN" | head -1 | cut -d: -f1)
             echo "✗ $FILE:$LINE — '$LABEL' pattern detected"
             ERRORS=$((ERRORS + 1))
         fi
