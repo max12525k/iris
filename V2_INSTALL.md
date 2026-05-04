@@ -1,16 +1,27 @@
 # Iris V2 — Install & Architecture Guide
 
-> **Status (2026-05-04):** Phases 1-4 + 6 are SHIPPED on `main`. Phases 5 and 7 are documented but their full implementation is operator-dependent (sandbox runtime choice, OIDC/Vault provisioning) — see [PHASE_5_SANDBOX.md](PHASE_5_SANDBOX.md) and [PHASE_7_TENANCY.md](PHASE_7_TENANCY.md) for the decision trees. Mission Control is provided via three Grafana dashboards (fleet overview, agent detail, compliance & audit) instead of a separate UI.
+> **Status (2026-05-04, V2.1):** Phases 1-4 + 6 are SHIPPED on `main`. Phase 3 was finalized in V2.1 — wrappers no longer create per-action git branches; the iris-curator now bundles dirty manifest paths into a single PR per cadence (the GitOps split this doc has always promised). Phases 5 and 7 are documented but operator-dependent — see [PHASE_5_SANDBOX.md](PHASE_5_SANDBOX.md) and [PHASE_7_TENANCY.md](PHASE_7_TENANCY.md). Mission Control is provided via three Grafana dashboards (fleet overview, agent detail, compliance & audit).
 
 | Phase | Scope | Status |
 |---|---|---|
 | 1 | Observability (OTel + Loki + Grafana + Prom) | SHIPPED |
 | 2 | Self-learning loop (lessons memory + Hermes Curator + nudges) | SHIPPED |
-| 3 | Event log + iris-curator (intent/observation split) | SHIPPED |
+| 3 | Event log + iris-curator (intent/observation split) | **SHIPPED (finalized in V2.1: wrappers no longer create iris-self/* branches; curator bundles into one PR)** |
 | 4 | Multi-profile fleet (persona, researcher, coder, ops) | SHIPPED |
 | 5 | Sandbox dispatch | DOC — operator picks runtime |
 | 6 | Audit log Postgres + Grafana compliance dashboards | SHIPPED |
 | 7 | Multi-tenant (OIDC, RBAC, Vault, pgvector namespacing) | DOC — corporate-only |
+
+**V2.0 → V2.1 wrapper behavior change** (per V2_INSTALL.md §6.3 spec, finally finalized):
+
+Before (V2.0):
+- Every wrapper invocation: stash dance → branch → manifest write → commit → restore. ~500ms latency.
+- N actions per day = N branches in the review queue. Required `make iris-clean` periodically.
+
+After (V2.1):
+- Every wrapper invocation: install action + manifest write + event log emit. ~10ms latency.
+- N actions per day = 0 branches. Working tree dirty until `iris-curator --emit-pr` bundles into one branch.
+- Review one PR per cadence with full distill context inline.
 
 Read top-to-bottom on the first pass; come back to specific phases when implementing.
 
