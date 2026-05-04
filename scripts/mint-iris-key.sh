@@ -38,7 +38,15 @@ else
     exit 1
   fi
 
-  echo "→ Minting virtual key (alias=iris-default, budget=\$50/30d, 60 RPM, 100K TPM)"
+  # Limits sized for Hermes's multi-call agent loop. A single conversation
+  # turn typically chains 3-5 model calls (system prompt + skills catalog +
+  # Honcho context + tool rounds + auxiliary models for compression /
+  # title_gen / vision). At 100K TPM (the early-stage default), nightly
+  # crons + a user message at the same time hit 429. 500K TPM gives
+  # comfortable headroom; 200 RPM matches the burstiness of subagent fanout.
+  # Budget cap of $50/30d remains unchanged — the TPM/RPM limits don't
+  # affect spend, just rate.
+  echo "→ Minting virtual key (alias=iris-default, budget=\$50/30d, 200 RPM, 500K TPM)"
   TMPFILE=$(mktemp)
   trap 'rm -f "$TMPFILE"' EXIT
 
@@ -50,8 +58,8 @@ else
       "models": ["iris-default", "iris-cheap", "iris-research", "iris-private", "iris-marketing", "iris-coding", "iris-briefing"],
       "max_budget": 50.00,
       "budget_duration": "30d",
-      "rpm_limit": 60,
-      "tpm_limit": 100000,
+      "rpm_limit": 200,
+      "tpm_limit": 500000,
       "metadata": {"workflow": "iris"}
     }' > "$TMPFILE"
 
