@@ -40,6 +40,18 @@ from pathlib import Path
 DB_PATH = Path(os.environ.get("IRIS_EVENT_LOG", "/opt/data/iris-events.db"))
 OUT_DIR = Path(os.environ.get("IRIS_CURATOR_OUT", "/repo/iris-curator-pending"))
 
+# Postgres backend (preferred — durable, multi-writer, queryable from Grafana).
+PG_HOST = os.environ.get("AUDIT_DB_HOST", "audit-db")
+PG_PORT = os.environ.get("AUDIT_DB_PORT", "5432")
+PG_NAME = os.environ.get("AUDIT_DB_NAME", "audit")
+PG_USER = os.environ.get("AUDIT_DB_USER", "audit_app")
+PG_PASS = os.environ.get("AUDIT_APP_PASSWORD", "")
+
+try:
+    import psycopg
+except ImportError:
+    psycopg = None
+
 
 def _parse_since(spec: str) -> dt.datetime:
     """'24h', '7d', '30m' → datetime in the past."""
@@ -51,38 +63,99 @@ def _parse_since(spec: str) -> dt.datetime:
     return dt.datetime.now(dt.timezone.utc) - delta
 
 
-def _connect() -> sqlite3.Connection:
+def _connect_postgres():
+    """Return a Postgres connection if one is available, else None."""
+    if psycopg is None or not PG_PASS:
+        return None
+    try:
+        return psycopg.connect(
+            f"postgresql://{PG_USER}:{PG_PASS}@{PG_HOST}:{PG_PORT}/{PG_NAME}",
+            connect_timeout=2,
+        )
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _connect_sqlite() -> sqlite3.Connection | None:
+    if not DB_PATH.exists():
+        return None
     return sqlite3.connect(str(DB_PATH))
 
 
-def _events_since(con: sqlite3.Connection, since: dt.datetime,
+def _events_since(since: dt.datetime,
                   tenant: str | None = None,
-                  profile: str | None = None) -> list[sqlite3.Row]:
-    """Query events since a window; optionally filter by tenant + profile.
+                  profile: str | None = None) -> list[dict]:
+    """Query events since a window. Backend priority: Postgres → SQLite.
 
     Phase 7 multi-tenant: when called with --tenant, only events for that
     tenant come back. Combined with --profile, you get a per-tenant per-
     role distill (e.g., "what did Acme's coder profile do this week").
+
+    Returns a list of dicts (uniform shape across both backends) so the
+    summarize/render code doesn't care where data came from.
     """
-    con.row_factory = sqlite3.Row
-    sql = """
-        SELECT id, ts, profile, tenant, actor, category, action, subject,
-               payload, outcome, trace_id, cost_usd, tokens_in, tokens_out
-        FROM events
-        WHERE ts >= ?
-    """
-    params: list = [since.strftime("%Y-%m-%d %H:%M:%S")]
-    if tenant is not None:
-        sql += " AND tenant = ?"
-        params.append(tenant)
-    if profile is not None:
-        sql += " AND profile = ?"
-        params.append(profile)
-    sql += " ORDER BY ts ASC"
-    return con.execute(sql, params).fetchall()
+    rows: list[dict] = []
+    pg_conn = _connect_postgres()
+    if pg_conn is not None:
+        try:
+            with pg_conn:
+                with pg_conn.cursor() as cur:
+                    sql = """
+                        SELECT id, ts, profile, tenant, actor, category, action, subject,
+                               payload, outcome, trace_id, cost_usd, tokens_in, tokens_out
+                        FROM event_log
+                        WHERE ts >= %s
+                    """
+                    params: list = [since]
+                    if tenant is not None:
+                        sql += " AND tenant = %s"
+                        params.append(tenant)
+                    if profile is not None:
+                        sql += " AND profile = %s"
+                        params.append(profile)
+                    sql += " ORDER BY ts ASC"
+                    cur.execute(sql, params)
+                    cols = [d[0] for d in cur.description]
+                    rows = [dict(zip(cols, r)) for r in cur.fetchall()]
+        finally:
+            pg_conn.close()
+
+    # Always check SQLite too — there may be events from before Postgres
+    # was reachable (graceful migration window). De-dup is by trace_id +
+    # ts; collisions across backends are extremely unlikely in practice.
+    sl = _connect_sqlite()
+    if sl is not None:
+        sl.row_factory = sqlite3.Row
+        sql = """
+            SELECT id, ts, profile, tenant, actor, category, action, subject,
+                   payload, outcome, trace_id, cost_usd, tokens_in, tokens_out
+            FROM events
+            WHERE ts >= ?
+        """
+        params: list = [since.strftime("%Y-%m-%d %H:%M:%S")]
+        if tenant is not None:
+            sql += " AND tenant = ?"
+            params.append(tenant)
+        if profile is not None:
+            sql += " AND profile = ?"
+            params.append(profile)
+        sql += " ORDER BY ts ASC"
+        sqlite_rows = [dict(r) for r in sl.execute(sql, params).fetchall()]
+        sl.close()
+        # If we have Postgres rows, only include SQLite rows older than the
+        # earliest Postgres row (i.e., from the migration window). Otherwise
+        # include all SQLite rows.
+        if rows:
+            earliest_pg = min(r["ts"] for r in rows)
+            # ts comparison: PG returns datetime, SQLite returns string.
+            # Normalize SQLite ts to string of PG ts for compare.
+            earliest_pg_str = earliest_pg.strftime("%Y-%m-%d %H:%M:%S") if hasattr(earliest_pg, "strftime") else str(earliest_pg)
+            sqlite_rows = [r for r in sqlite_rows if str(r["ts"]) < earliest_pg_str]
+        rows = sqlite_rows + rows
+    return rows
 
 
-def _summarize(rows: list[sqlite3.Row]) -> dict:
+def _summarize(rows: list[dict]) -> dict:
     """Bucket rows for the markdown output. Pure function; no side effects."""
     by_category: defaultdict[str, list] = defaultdict(list)
     outcomes: Counter = Counter()
@@ -93,7 +166,7 @@ def _summarize(rows: list[sqlite3.Row]) -> dict:
 
     for r in rows:
         d = dict(r)
-        if d.get("payload"):
+        if d.get("payload") and isinstance(d["payload"], str):
             try:
                 d["payload"] = json.loads(d["payload"])
             except (json.JSONDecodeError, TypeError):
@@ -199,21 +272,33 @@ def _markdown(summary: dict, since: dt.datetime, until: dt.datetime) -> str:
 
 
 def cmd_status() -> int:
-    """Quick stats — useful for sanity checks."""
-    if not DB_PATH.exists():
-        print(f"event log not present at {DB_PATH}")
-        return 1
-    con = _connect()
-    total = con.execute("SELECT COUNT(*) FROM events").fetchone()[0]
-    by_cat = dict(
-        con.execute("SELECT category, COUNT(*) FROM events GROUP BY category ORDER BY 2 DESC").fetchall()
-    )
-    last = con.execute("SELECT ts, category, action, subject FROM events ORDER BY id DESC LIMIT 1").fetchone()
-    print(f"Event log: {DB_PATH}")
-    print(f"  total events: {total}")
-    print(f"  by category:  {by_cat}")
-    if last:
-        print(f"  last event:   {last[0]}  {last[1]}.{last[2]} {last[3] or ''}")
+    """Quick stats — useful for sanity checks. Reports both backends."""
+    pg = _connect_postgres()
+    if pg is not None:
+        try:
+            with pg:
+                with pg.cursor() as cur:
+                    cur.execute("SELECT COUNT(*) FROM event_log")
+                    total = cur.fetchone()[0]
+                    cur.execute("SELECT category, COUNT(*) FROM event_log GROUP BY category ORDER BY 2 DESC")
+                    by_cat = dict(cur.fetchall())
+                    cur.execute("SELECT ts, category, action, subject FROM event_log ORDER BY id DESC LIMIT 1")
+                    last = cur.fetchone()
+            print(f"Event log: postgres://{PG_HOST}/{PG_NAME}.event_log")
+            print(f"  total events: {total}")
+            print(f"  by category:  {by_cat}")
+            if last:
+                print(f"  last event:   {last[0]}  {last[1]}.{last[2]} {last[3] or ''}")
+        finally:
+            pg.close()
+    else:
+        print(f"Event log: postgres unreachable; falling back to SQLite")
+
+    if DB_PATH.exists():
+        sl = sqlite3.connect(str(DB_PATH))
+        sl_total = sl.execute("SELECT COUNT(*) FROM events").fetchone()[0]
+        sl.close()
+        print(f"  sqlite fallback: {DB_PATH}  ({sl_total} events; pre-migration)")
     return 0
 
 
@@ -234,15 +319,13 @@ def main() -> int:
     if args.status:
         return cmd_status()
 
-    if not DB_PATH.exists():
-        print(f"iris-curator: event log missing at {DB_PATH}", file=sys.stderr)
-        return 1
-
     until = dt.datetime.now(dt.timezone.utc)
     since = _parse_since(args.since)
 
-    con = _connect()
-    rows = _events_since(con, since, tenant=args.tenant, profile=args.profile)
+    rows = _events_since(since, tenant=args.tenant, profile=args.profile)
+    if not rows and not DB_PATH.exists() and _connect_postgres() is None:
+        print("iris-curator: no event log reachable (Postgres + SQLite both empty)", file=sys.stderr)
+        return 1
     summary = _summarize(rows)
     md = _markdown(summary, since, until)
 

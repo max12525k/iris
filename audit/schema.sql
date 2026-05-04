@@ -121,3 +121,66 @@ INSERT INTO audit_log (
     'ok', jsonb_build_object('version', 'v2.phase6', 'created_at', NOW())
 )
 ON CONFLICT DO NOTHING;
+
+-- ─── event_log — operational event stream (replaces SQLite WAL) ─────────────
+--
+-- Distinct from audit_log on these axes:
+--   audit_log = compliance, append-only, retention-policy controlled,
+--               every tool call lands here (Hermes hooks)
+--   event_log = operational, high-volume, used by iris-curator distill,
+--               every wrapper invocation lands here (the bash wrappers)
+--
+-- Why move from SQLite WAL to Postgres:
+--   1. SQLite lived in /opt/data named volume — destroyed by `down -v`.
+--      Postgres in audit-db has the same exposure but is easier to back up
+--      via pg_dump and to bind-mount the data dir for guaranteed durability.
+--   2. Single source of truth for both event + audit makes Grafana panels
+--      simpler (one Postgres datasource, two tables).
+--   3. Concurrent writes from N profile gateways + reconciler don't
+--      contend on a single SQLite file (Postgres handles multi-writer).
+--   4. Cross-row queries (joins between audit + event for a given trace_id)
+--      become trivial.
+
+CREATE TABLE IF NOT EXISTS event_log (
+    id              BIGSERIAL PRIMARY KEY,
+    ts              TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+
+    profile         TEXT NOT NULL DEFAULT 'default',
+    tenant          TEXT,                          -- NULL in personal mode
+    actor           TEXT NOT NULL DEFAULT 'iris',  -- iris | curator | user-id | system
+
+    category        TEXT NOT NULL,                 -- skill | cron | mcp | package | memory | tool_call | mcp_serve | reconcile
+    action          TEXT NOT NULL,                 -- install | uninstall | add | remove | invoke | propose | succeed | fail | started
+    subject         TEXT,                          -- name/id of what was acted on
+
+    payload         JSONB,                         -- structured detail
+    outcome         TEXT NOT NULL DEFAULT 'ok',    -- ok | error | timeout | cancelled
+    trace_id        TEXT,                          -- correlation across services
+
+    cost_usd        NUMERIC(10, 6),                -- per-call cost
+    tokens_in       INTEGER,
+    tokens_out      INTEGER
+);
+
+-- Hot-path indexes match the SQLite schema we're replacing.
+CREATE INDEX IF NOT EXISTS event_log_ts          ON event_log(ts DESC);
+CREATE INDEX IF NOT EXISTS event_log_actor_ts    ON event_log(actor, ts DESC);
+CREATE INDEX IF NOT EXISTS event_log_category_ts ON event_log(category, ts DESC);
+CREATE INDEX IF NOT EXISTS event_log_outcome_ts  ON event_log(outcome, ts DESC) WHERE outcome != 'ok';
+CREATE INDEX IF NOT EXISTS event_log_trace       ON event_log(trace_id) WHERE trace_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS event_log_tenant_ts   ON event_log(tenant, ts DESC);
+CREATE INDEX IF NOT EXISTS event_log_profile_ts  ON event_log(profile, ts DESC);
+
+-- Same role grants as audit_log — audit_app writes, audit_reader reads.
+-- UPDATE/DELETE explicitly NOT granted to either role; mutations require
+-- the DBA (audit user) which deliberately doesn't connect from app code.
+GRANT INSERT, SELECT ON event_log TO audit_app;
+GRANT USAGE, SELECT ON SEQUENCE event_log_id_seq TO audit_app;
+GRANT SELECT ON event_log TO audit_reader;
+REVOKE UPDATE, DELETE, TRUNCATE ON event_log FROM audit;
+
+-- Sentinel row.
+INSERT INTO event_log (category, action, subject, outcome, payload)
+VALUES ('reconcile', 'init', 'event_log_schema',
+        'ok', jsonb_build_object('version', 'v2.phase6.postgres', 'created_at', NOW()))
+ON CONFLICT DO NOTHING;
