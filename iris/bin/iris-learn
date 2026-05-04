@@ -1,22 +1,27 @@
 #!/usr/bin/env bash
-# iris-learn — atomically install a package AND record it in the learning
-# manifest, so the install survives container recreate and image rebuild.
+# iris-learn (V2.1) — install a package, update the manifest, emit events.
+#
+# What changed from V2.0:
+#   V2.0 created a per-action iris-self/learn-<pkg> git branch + commit on
+#   every invocation. That was the github-flow bottleneck — 6+ wrapper bugs
+#   came from the stash dance, branch sprawl needed periodic make iris-clean,
+#   and review noise grew with every action.
+#
+#   V2.1 strips all the git plumbing. Wrappers update the manifest in-place
+#   on whatever branch is checked out. The iris-curator nightly run reads
+#   the event log + dirty manifest paths and produces ONE PR per cadence.
+#   Result: ms-latency wrappers, 1 review/day instead of N branches/day.
+#
+# Three steps:
+#   1. Install the package (apt-get / uv pip / npm). On failure: record
+#      lesson, emit error event, exit non-zero.
+#   2. Update /repo/iris/iris-learned/<eco>.txt + rationale.md in-place.
+#      Idempotent — won't add duplicates. Working tree gets dirty; the
+#      curator handles staging + PR.
+#   3. Emit success events (event log + OTel).
 #
 # Usage: iris-learn <ecosystem> <package> [reason]
 #   ecosystem: apt | python | npm
-#
-# Three actions, in order. If any fails, later steps are skipped and Iris
-# is told what state things are in.
-#
-#   1. Install the package now (apt-get / pip into Hermes's venv / npm -g).
-#   2. Append the package to /repo/iris/iris-learned/<ecosystem>.txt
-#      (idempotent — won't add duplicates) and append a rationale entry.
-#   3. Commit the manifest change on an iris-self/learn-<pkg> branch so
-#      `make iris-review` surfaces it for human approval.
-#
-# Branch hygiene: a "stash dance" preserves whatever the user had checked
-# out in /repo before this script ran, so iris-learn never disturbs the
-# user's working state on the host.
 
 set -euo pipefail
 
@@ -33,7 +38,7 @@ usage: iris-learn <apt|python|npm> <package> [reason]
   npm     global npm package (lands in ~/.local/lib/node_modules)
 
 Reason should be one short sentence — it goes into the learning journal
-and helps future review understand why this package is in the manifest.
+and helps the curator's PR explain why this package landed in the manifest.
 EOF
     exit 64
 fi
@@ -45,20 +50,16 @@ esac
 
 REPO="${IRIS_REPO_ROOT:-/repo}"
 LEARN_DIR="$REPO/iris/iris-learned"
+[ -d "$LEARN_DIR" ] || { echo "iris-learn: manifest dir missing at $LEARN_DIR" >&2; exit 1; }
 
-if [ ! -d "$LEARN_DIR" ]; then
-    echo "iris-learn: manifest dir missing at $LEARN_DIR" >&2
-    echo "  (is /repo bind-mounted? are you running this inside iris-gateway?)" >&2
-    exit 1
-fi
-
-# ─── Step 1: install now ────────────────────────────────────────────────────
+# ─── Step 1: install ────────────────────────────────────────────────────────
 
 echo "→ installing $ECO $PKG"
 _otel_emit --category package --action install --subject "$ECO:$PKG" \
            --outcome started --attr eco="$ECO" --attr reason="$REASON" 2>/dev/null || true
 _event_log --category package --action started --subject "$ECO:$PKG" \
            --payload-key eco="$ECO" --payload-key reason="$REASON" 2>/dev/null || true
+
 INSTALL_RC=0
 case "$ECO" in
     apt)
@@ -66,80 +67,40 @@ case "$ECO" in
         sudo apt-get install -y --no-install-recommends "$PKG" || INSTALL_RC=$?
         ;;
     python)
-        # Install into Hermes's venv so Iris can `import` it on the next turn.
-        # User-site (~/.local) wouldn't be picked up by the venv's isolated
-        # python. Hermes ships uv (not pip) in the venv, so we use uv directly
-        # and target the venv's interpreter explicitly.
         uv pip install --quiet --python /opt/hermes/.venv/bin/python "$PKG" || INSTALL_RC=$?
         ;;
     npm)
-        # Configure user prefix once so `npm install -g` lands in ~/.local
-        # instead of /usr/lib (which would need sudo).
         npm config set prefix "$HOME/.local" --location=user >/dev/null
         npm install -g --silent "$PKG" || INSTALL_RC=$?
         ;;
 esac
+
 if [ "$INSTALL_RC" -ne 0 ]; then
     _otel_emit --category package --action install --subject "$ECO:$PKG" \
                --outcome error --attr eco="$ECO" --attr exit_code="$INSTALL_RC" 2>/dev/null || true
     _event_log --category package --action install --subject "$ECO:$PKG" \
                --outcome error --payload-key eco="$ECO" --payload-key exit_code="$INSTALL_RC" 2>/dev/null || true
     _record_lesson --category package --subject "$ECO:$PKG" \
-                     --error-class "install_failed" \
-                     --lesson "Package $ECO:$PKG failed to install (exit $INSTALL_RC). Verify the name is spelled correctly and exists in the $ECO registry before trying again. For python packages, 'uv pip search <name>' or pypi.org are useful; for apt, 'apt-cache search'." 2>/dev/null || true
+                   --error-class "install_failed" \
+                   --lesson "Package $ECO:$PKG failed to install (exit $INSTALL_RC). Verify the name and registry: 'uv pip search <name>' or pypi.org for python; 'apt-cache search <name>' for apt." 2>/dev/null || true
     exit "$INSTALL_RC"
 fi
 
-# ─── Step 2: update manifest + rationale ────────────────────────────────────
-# Done on an iris-self branch via a stash dance so the user's current branch
-# and working tree are untouched.
+# ─── Step 2: update manifest in-place ───────────────────────────────────────
+# No git operations. Working tree gets dirty on whatever branch is checked
+# out. iris-curator picks up the dirty path on its next run and bundles all
+# accumulated changes into one reviewable PR.
 
-cd "$REPO"
-
-ORIG_BRANCH=$(git rev-parse --abbrev-ref HEAD)
-STASH_REF=""
-if [ -n "$(git status --porcelain)" ]; then
-    STASH_MSG="iris-learn-prestash-$(date -u +%Y%m%dT%H%M%SZ)"
-    git stash push --include-untracked --quiet -m "$STASH_MSG"
-    STASH_REF="$STASH_MSG"
-fi
-
-# Branch name: sanitize package spec to filesystem-safe form
-SAFE_PKG=$(printf '%s' "$PKG" | tr '/@=<>!~*' '------' | tr -cd 'a-zA-Z0-9.-')
-BRANCH="iris-self/learn-${ECO}-${SAFE_PKG}"
-
-restore_state() {
-    git checkout --quiet "$ORIG_BRANCH" 2>/dev/null || true
-    if [ -n "$STASH_REF" ]; then
-        git stash pop --quiet || echo "iris-learn: WARNING — could not pop stash '$STASH_REF', recover with 'git stash list'" >&2
-    fi
-}
-trap restore_state EXIT
-
-# If a branch by this name already exists, rename it with a timestamp + SHA
-# suffix instead of reusing it. Reusing is brittle: a stale branch may not
-# include later main-branch commits (e.g., iris-learned/ itself), so writing
-# to it fails. Renaming preserves any prior commits for review while letting
-# us start fresh from current HEAD.
-if git rev-parse --verify --quiet "$BRANCH" >/dev/null; then
-    OLD_SHA=$(git rev-parse --short "$BRANCH")
-    ARCHIVE="${BRANCH}-prev-$(date -u +%Y%m%dT%H%M%SZ)-${OLD_SHA}"
-    git branch -m "$BRANCH" "$ARCHIVE"
-    echo "  (renamed pre-existing $BRANCH → $ARCHIVE so this run starts clean)"
-fi
-git checkout --quiet -b "$BRANCH"
-
-# Append to <eco>.txt (idempotent)
 MANIFEST="$LEARN_DIR/$ECO.txt"
+MANIFEST_CHANGED=0
 if grep -qxF "$PKG" "$MANIFEST" 2>/dev/null; then
     echo "  (already in $ECO.txt — recording rationale only)"
-    MANIFEST_CHANGED=0
 else
     printf '%s\n' "$PKG" >> "$MANIFEST"
     MANIFEST_CHANGED=1
 fi
 
-# Append rationale (always — even repeat asks are signal)
+# Always append rationale — even repeat asks are signal for the curator.
 TIMESTAMP=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 {
     echo ""
@@ -147,41 +108,14 @@ TIMESTAMP=$(date -u +%Y-%m-%dT%H:%M:%SZ)
     echo "**Trigger:** $REASON"
 } >> "$LEARN_DIR/rationale.md"
 
-# Commit on the iris-self branch
-git add "iris/iris-learned/"
-COMMIT_MSG="iris-self: learn $ECO $PKG
-
-Reason: $REASON
-
-Installed at runtime via iris-learn and recorded in iris/iris-learned/
-so a future image rebuild bakes it into the image."
-
-if git diff --cached --quiet; then
-    echo "  (nothing to commit — manifest unchanged)"
-else
-    if git commit --quiet -m "$COMMIT_MSG"; then
-        echo "✓ committed on $BRANCH"
-    else
-        echo "iris-learn: WARNING — install succeeded but commit failed." >&2
-        echo "  Manifest is updated on disk; please commit by hand." >&2
-        # leave trap to restore branch
-        exit 1
-    fi
-fi
-
-# Disarm trap and explicitly restore state on success path so we don't double-restore
-trap - EXIT
-restore_state
+# ─── Step 3: success events ─────────────────────────────────────────────────
 
 _otel_emit --category package --action install --subject "$ECO:$PKG" \
-           --outcome ok --attr eco="$ECO" --attr branch="$BRANCH" \
-           --attr manifest_changed="$MANIFEST_CHANGED" 2>/dev/null || true
+           --outcome ok --attr eco="$ECO" --attr manifest_changed="$MANIFEST_CHANGED" 2>/dev/null || true
 _event_log --category package --action install --subject "$ECO:$PKG" --outcome ok \
-           --payload-key eco="$ECO" --payload-key branch="$BRANCH" \
-           --payload-key manifest_changed="$MANIFEST_CHANGED" 2>/dev/null || true
+           --payload-key eco="$ECO" --payload-key manifest_changed="$MANIFEST_CHANGED" 2>/dev/null || true
 
 echo ""
 echo "✓ learned $ECO $PKG"
-[ "$MANIFEST_CHANGED" -eq 1 ] && echo "  manifest: iris/iris-learned/$ECO.txt"
-echo "  branch:   $BRANCH"
-echo "  review:   make iris-review"
+[ "$MANIFEST_CHANGED" -eq 1 ] && echo "  manifest: iris/iris-learned/$ECO.txt (working tree dirty; curator will batch)"
+echo "  next:    iris-curator --since 24h  (preview)  or  iris-curator --emit-pr  (commit + PR)"

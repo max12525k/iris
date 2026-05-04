@@ -1,30 +1,37 @@
 #!/opt/hermes/.venv/bin/python
 """Iris Curator — distill the event log into a markdown summary for human review.
 
-Reads /opt/data/iris-events.db, groups events since the last cycle by
-category + outcome, and emits a markdown file at
-/repo/iris-curator-pending/distill-YYYY-MM-DD.md.
+V2.1 — also bundles dirty manifest paths into a single commit / PR per
+cadence, replacing the per-action iris-self/* commits the V1 wrappers
+used to make. This is the GitOps split V2_INSTALL.md §6 promised:
+fast autonomous OBSERVATION (event log) decoupled from slow reviewed
+INTENT (manifests, opened as one PR per day).
 
-The markdown file IS the review artifact. Phase 3 keeps it manual:
-the human reads the file, decides whether the suggested manifest changes
-make sense, and either commits / rejects / edits before merging into main.
+Reads the event log (Postgres event_log table preferred; SQLite fallback),
+groups events since the last cycle by category + outcome, and emits a
+markdown file at /repo/iris-curator-pending/distill-YYYY-MM-DD.md.
 
-Phase 3.x will add auto-PR (open a PR via gh CLI from a dedicated container
-with scoped GitHub token). Phase 6 will package this as a long-running
-service in compose, scheduled by Hermes cron.
+When --emit-pr is passed AND /repo has dirty manifest paths (iris-learned/,
+iris-config/cron.yaml/skills.json/mcp.yaml), the curator:
+  1. Creates a branch iris-curator/distill-YYYY-MM-DD-HHMMSS
+  2. Stages ONLY the known manifest paths (user WIP elsewhere is untouched)
+  3. Commits with the distill markdown as the body
+  4. Reports the branch name; user pushes via 'git push' + opens PR
 
 Usage:
-    iris-curator              run once for the prior 24h
+    iris-curator              run once for the prior 24h, write distill file
     iris-curator --since 7d   look back 7 days
     iris-curator --print-only don't write file; print to stdout
+    iris-curator --emit-pr    write distill + commit dirty manifests on a branch
     iris-curator --status     just print event-log stats and exit
+    iris-curator --tenant X   filter to one tenant
+    iris-curator --profile Y  filter to one profile
 
 Design properties:
-  - No LLM call by default (deterministic distill). An LLM-backed mode
-    can be added later via --llm flag.
-  - Idempotent — running twice for the same window overwrites the file.
-  - File-based handoff — works without GitHub auth, in air-gapped envs,
-    and via 'scp' onto a reviewer's laptop if needed.
+  - No LLM call by default (deterministic distill); --llm flag reserved.
+  - Idempotent within the day — re-running just regenerates the markdown.
+  - File-based handoff for review — works without GitHub auth.
+  - Branch creation respects user WIP — only known manifest paths staged.
 """
 from __future__ import annotations
 
@@ -33,9 +40,20 @@ import datetime as dt
 import json
 import os
 import sqlite3
+import subprocess
 import sys
 from collections import Counter, defaultdict
 from pathlib import Path
+
+# Manifest paths the curator manages. ONLY these get staged when --emit-pr
+# is invoked — anything else in /repo is left untouched (user WIP safety).
+MANIFEST_PATHS = [
+    "iris/iris-learned",                  # apt.txt, python.txt, npm.txt, rationale.md
+    "iris/iris-config/cron.yaml",
+    "iris/iris-config/skills.json",
+    "iris/iris-config/mcp.yaml",
+]
+REPO_ROOT = Path(os.environ.get("IRIS_REPO_ROOT", "/repo"))
 
 DB_PATH = Path(os.environ.get("IRIS_EVENT_LOG", "/opt/data/iris-events.db"))
 OUT_DIR = Path(os.environ.get("IRIS_CURATOR_OUT", "/repo/iris-curator-pending"))
@@ -271,6 +289,96 @@ def _markdown(summary: dict, since: dt.datetime, until: dt.datetime) -> str:
     return "\n".join(parts)
 
 
+def _git(*args, check: bool = True) -> subprocess.CompletedProcess:
+    """Run git in REPO_ROOT, capturing output. check=False to allow non-zero."""
+    return subprocess.run(
+        ["git", "-C", str(REPO_ROOT), *args],
+        capture_output=True,
+        text=True,
+        check=check,
+    )
+
+
+def _dirty_manifests() -> list[str]:
+    """Return the subset of MANIFEST_PATHS that have uncommitted changes."""
+    dirty: list[str] = []
+    for p in MANIFEST_PATHS:
+        # `git status --porcelain` shows changes for staged AND unstaged.
+        # Empty output for the path = clean.
+        result = _git("status", "--porcelain", "--", p, check=False)
+        if result.stdout.strip():
+            dirty.append(p)
+    return dirty
+
+
+def emit_pr(summary: dict, distill_md: str, until: dt.datetime) -> int:
+    """Stage dirty manifest paths and commit them on a new curator branch.
+    Caller is responsible for pushing + opening the PR (gh auth lives on host)."""
+    dirty = _dirty_manifests()
+    if not dirty:
+        print("iris-curator: no dirty manifest paths — nothing to commit")
+        print("  (event log activity is recorded in the distill markdown for review)")
+        return 0
+
+    # Branch name with timestamp so multiple runs on the same day don't collide.
+    ts = until.strftime("%Y-%m-%d-%H%M%S")
+    branch = f"iris-curator/distill-{ts}"
+
+    orig_branch = _git("rev-parse", "--abbrev-ref", "HEAD").stdout.strip()
+    print(f"iris-curator: creating branch {branch} from {orig_branch}")
+    _git("checkout", "-b", branch)
+
+    try:
+        # Stage ONLY the manifest paths we own — never user WIP elsewhere.
+        for p in dirty:
+            _git("add", "--", p)
+
+        # Commit message: title + distill markdown as body. The curator's
+        # distill IS the PR body; reviewer reads it inline on GitHub.
+        title = f"iris-curator: distill {until.strftime('%Y-%m-%d')} ({len(dirty)} manifest path(s))"
+        msg_body = (
+            f"{title}\n\n"
+            f"This commit bundles all manifest changes Iris's wrappers made\n"
+            f"in the curator's lookback window. Review the distill below for\n"
+            f"context (event counts, promotion candidates, recurring failures).\n\n"
+            f"Manifests changed:\n"
+            + "\n".join(f"  - {p}" for p in dirty)
+            + "\n\n---\n\n"
+            + distill_md
+        )
+
+        # `git commit` will fire the pre-commit + commit-msg hooks (secret
+        # scan + iris-self policy). The branch name `iris-curator/...`
+        # is NOT iris-self/* and the message prefix isn't iris-self: so
+        # the policy hook treats it as a regular commit.
+        result = _git("commit", "-m", msg_body, check=False)
+        if result.returncode != 0:
+            print(f"iris-curator: commit failed: {result.stdout}\n{result.stderr}", file=sys.stderr)
+            _git("checkout", orig_branch, check=False)
+            _git("branch", "-D", branch, check=False)
+            return 1
+
+        sha = _git("rev-parse", "--short", branch).stdout.strip()
+        date_str = until.strftime("%Y-%m-%d")
+        body_path = OUT_DIR / f"distill-{date_str}.md"
+        print(f"iris-curator: committed {sha} on {branch}")
+        print()
+        print("  Push + open PR:")
+        print(f"    git push origin {branch}")
+        print(f'    gh pr create --base main --head {branch} \\')
+        print(f'      --title "{title}" --body-file "{body_path}"')
+        print()
+        print("  Or merge directly to main if you trust the diff:")
+        print(f"    git merge --ff-only {branch}")
+
+        _git("checkout", orig_branch, check=False)
+    finally:
+        # Restore original branch even if anything in the try-block raised.
+        if _git("rev-parse", "--abbrev-ref", "HEAD").stdout.strip() != orig_branch:
+            _git("checkout", orig_branch, check=False)
+    return 0
+
+
 def cmd_status() -> int:
     """Quick stats — useful for sanity checks. Reports both backends."""
     pg = _connect_postgres()
@@ -314,6 +422,9 @@ def main() -> int:
                    help="filter events to this tenant only (Phase 7 multi-tenant)")
     p.add_argument("--profile", default=None,
                    help="filter events to this profile only (researcher | coder | ...)")
+    p.add_argument("--emit-pr", action="store_true",
+                   help="V2.1: bundle dirty manifest paths into a single curator branch + commit. "
+                        "Replaces the per-action iris-self/* commits the V1 wrappers used to make.")
     args = p.parse_args()
 
     if args.status:
@@ -344,6 +455,9 @@ def main() -> int:
     out_path = OUT_DIR / f"distill-{until.strftime('%Y-%m-%d')}{suffix}.md"
     out_path.write_text(md)
     print(f"iris-curator: wrote {out_path}  ({summary['total']} events)")
+
+    if args.emit_pr:
+        return emit_pr(summary, md, until)
     return 0
 
 

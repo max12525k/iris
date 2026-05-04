@@ -86,36 +86,9 @@ if [ "$ACTION" = "add" ]; then
     fi
 fi
 
-# ─── Stash dance + branch switch BEFORE manifest write ──────────────────────
+# ─── V2.1 — direct manifest update + reconcile, no git plumbing ────────────
 
 cd "$REPO"
-
-ORIG_BRANCH=$(git rev-parse --abbrev-ref HEAD)
-STASH_REF=""
-if [ -n "$(git status --porcelain)" ]; then
-    STASH_MSG="iris-mcp-prestash-$(date -u +%Y%m%dT%H%M%SZ)"
-    git stash push --include-untracked --quiet -m "$STASH_MSG"
-    STASH_REF="$STASH_MSG"
-fi
-
-SAFE_NAME=$(printf '%s' "$NAME" | tr -cd 'a-zA-Z0-9.-')
-BRANCH="iris-self/mcp-${ACTION}-${SAFE_NAME}"
-
-restore_state() {
-    git checkout --quiet "$ORIG_BRANCH" 2>/dev/null || true
-    if [ -n "$STASH_REF" ]; then
-        git stash pop --quiet || echo "iris-mcp: WARNING — could not pop stash '$STASH_REF', recover with 'git stash list'" >&2
-    fi
-}
-trap restore_state EXIT
-
-if git rev-parse --verify --quiet "$BRANCH" >/dev/null; then
-    OLD_SHA=$(git rev-parse --short "$BRANCH")
-    ARCHIVE="${BRANCH}-prev-$(date -u +%Y%m%dT%H%M%SZ)-${OLD_SHA}"
-    git branch -m "$BRANCH" "$ARCHIVE"
-    echo "  (renamed pre-existing $BRANCH → $ARCHIVE so this run starts clean)"
-fi
-git checkout --quiet -b "$BRANCH"
 
 # ─── Update manifest via Python (clean YAML escaping) ───────────────────────
 
@@ -185,44 +158,13 @@ case "$ACTION" in
         ;;
 esac
 
-# ─── Commit on the iris-self branch ─────────────────────────────────────────
+# V2.1 — no git operations. Manifest is dirty in working tree;
+# iris-curator picks it up on its nightly run and bundles into one PR.
 
-git add iris/iris-config/mcp.yaml
-if git diff --cached --quiet; then
-    echo "  (nothing to commit — manifest unchanged)"
-else
-    case "$ACTION" in
-        add)
-            MSG="iris-self: add MCP server '$NAME'
-
-Recorded in iris/iris-config/mcp.yaml; reconcile will run
-'hermes mcp add $NAME ...' on every boot so the connection survives
-recreate and fresh-clone."
-            ;;
-        rm)
-            MSG="iris-self: remove MCP server '$NAME'
-
-Removed from iris/iris-config/mcp.yaml and from Hermes config."
-            ;;
-    esac
-    if git commit --quiet -m "$MSG"; then
-        echo "✓ committed on $BRANCH"
-    else
-        echo "iris-mcp: WARNING — manifest updated but commit failed; commit by hand" >&2
-        exit 1
-    fi
-fi
-
-trap - EXIT
-restore_state
-
-_otel_emit --category mcp --action "$ACTION" --subject "$NAME" --outcome ok \
-           --attr branch="$BRANCH" 2>/dev/null || true
-_event_log --category mcp --action "$ACTION" --subject "$NAME" --outcome ok \
-           --payload-key branch="$BRANCH" 2>/dev/null || true
+_otel_emit --category mcp --action "$ACTION" --subject "$NAME" --outcome ok 2>/dev/null || true
+_event_log --category mcp --action "$ACTION" --subject "$NAME" --outcome ok 2>/dev/null || true
 
 echo ""
 echo "✓ MCP server '$NAME' ${ACTION}ed"
-echo "  manifest: iris/iris-config/mcp.yaml"
-echo "  branch:   $BRANCH"
-echo "  review:   make iris-review"
+echo "  manifest: iris/iris-config/mcp.yaml (working tree dirty; curator will batch)"
+echo "  next:    iris-curator --since 24h  (preview)  or  iris-curator --emit-pr  (commit + PR)"

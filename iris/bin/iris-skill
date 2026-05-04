@@ -113,42 +113,13 @@ case "$ACTION" in
         ;;
 esac
 
-# ─── Stash dance + branch switch BEFORE manifest write ──────────────────────
+# ─── V2.1 — direct snapshot export to manifest, no git plumbing ────────────
+# Hermes's snapshot export includes a volatile exported_at timestamp. We
+# strip it so repeated exports of the same logical state produce identical
+# files (no diff noise). The hermes_version field is also dropped — it's
+# not meaningful for import (Hermes ignores it) and it changes per image.
 
 cd "$REPO"
-
-ORIG_BRANCH=$(git rev-parse --abbrev-ref HEAD)
-STASH_REF=""
-if [ -n "$(git status --porcelain)" ]; then
-    STASH_MSG="iris-skill-prestash-$(date -u +%Y%m%dT%H%M%SZ)"
-    git stash push --include-untracked --quiet -m "$STASH_MSG"
-    STASH_REF="$STASH_MSG"
-fi
-
-SAFE_NAME=$(printf '%s' "$NAME" | tr -cd 'a-zA-Z0-9.-')
-BRANCH="iris-self/skill-${ACTION}-${SAFE_NAME}"
-
-restore_state() {
-    git checkout --quiet "$ORIG_BRANCH" 2>/dev/null || true
-    if [ -n "$STASH_REF" ]; then
-        git stash pop --quiet || echo "iris-skill: WARNING — could not pop stash '$STASH_REF', recover with 'git stash list'" >&2
-    fi
-}
-trap restore_state EXIT
-
-if git rev-parse --verify --quiet "$BRANCH" >/dev/null; then
-    OLD_SHA=$(git rev-parse --short "$BRANCH")
-    ARCHIVE="${BRANCH}-prev-$(date -u +%Y%m%dT%H%M%SZ)-${OLD_SHA}"
-    git branch -m "$BRANCH" "$ARCHIVE"
-    echo "  (renamed pre-existing $BRANCH → $ARCHIVE so this run starts clean)"
-fi
-git checkout --quiet -b "$BRANCH"
-
-# ─── Export snapshot, canonicalize, write manifest ──────────────────────────
-# Hermes's snapshot includes a volatile exported_at timestamp. We strip it so
-# repeated exports of the same logical state produce identical files (no diff
-# noise). The hermes_version field is also dropped — it's not meaningful for
-# import (Hermes ignores it) and it changes when the image upgrades.
 
 TMP_SNAPSHOT=$(mktemp)
 "$HERMES" skills snapshot export "$TMP_SNAPSHOT" >/dev/null
@@ -168,40 +139,10 @@ with open(os.environ["MANIFEST_PATH"], "w") as f:
 PY
 rm -f "$TMP_SNAPSHOT"
 
-# ─── Commit on the iris-self branch ─────────────────────────────────────────
-
-git add iris/iris-config/skills.json
-if git diff --cached --quiet; then
-    echo "  (nothing to commit — manifest unchanged)"
-else
-    case "$ACTION" in
-        install)   MSG="iris-self: install skill '$NAME'
-
-Recorded in iris/iris-config/skills.json so a fresh-clone pickup
-via 'hermes skills snapshot import' will reinstall it." ;;
-        uninstall) MSG="iris-self: uninstall skill '$NAME'
-
-Removed from iris/iris-config/skills.json; on next reconcile / fresh
-boot the skill will not be reinstalled." ;;
-    esac
-    if git commit --quiet -m "$MSG"; then
-        echo "✓ committed on $BRANCH"
-    else
-        echo "iris-skill: WARNING — manifest updated but commit failed; commit by hand" >&2
-        exit 1
-    fi
-fi
-
-trap - EXIT
-restore_state
-
-_otel_emit --category skill --action "$ACTION" --subject "$NAME" --outcome ok \
-           --attr branch="$BRANCH" 2>/dev/null || true
-_event_log --category skill --action "$ACTION" --subject "$NAME" --outcome ok \
-           --payload-key branch="$BRANCH" 2>/dev/null || true
+_otel_emit --category skill --action "$ACTION" --subject "$NAME" --outcome ok 2>/dev/null || true
+_event_log --category skill --action "$ACTION" --subject "$NAME" --outcome ok 2>/dev/null || true
 
 echo ""
 echo "✓ skill '$NAME' ${ACTION}ed"
-echo "  manifest: iris/iris-config/skills.json"
-echo "  branch:   $BRANCH"
-echo "  review:   make iris-review"
+echo "  manifest: iris/iris-config/skills.json (working tree dirty; curator will batch)"
+echo "  next:    iris-curator --since 24h  (preview)  or  iris-curator --emit-pr  (commit + PR)"
