@@ -2,7 +2,7 @@
 
 A self-hosted, privacy-routed AI assistant built on [NousResearch/hermes-agent](https://github.com/NousResearch/hermes-agent). Brain runs on Kimi K2.6 via [LiteLLM](https://github.com/BerriAI/litellm) over OpenRouter; can delegate coding tasks to Claude Code (your Claude Max plan) via a sidecar; falls back to local Ollama for sensitive prompts. Persistent memory via [Honcho](https://github.com/plastic-labs/honcho). Every cloud call passes through [Presidio](https://github.com/microsoft/presidio) PII guardrails.
 
-**V2 (current `main`)** adds five planes on top: observability (OTel + Loki + Grafana), self-learning loop (lessons memory + Hermes Curator + periodic nudges), event log + Iris Curator (GitOps split — fast autonomous observation, slow reviewed intent), multi-profile fleet (persona / researcher / coder / ops, opt-in), and an append-only audit log Postgres for compliance. See [V2_INSTALL.md](V2_INSTALL.md) for the full architecture spec, [PHASE_5_SANDBOX.md](PHASE_5_SANDBOX.md) for the sandbox-runtime decision tree, and [PHASE_7_TENANCY.md](PHASE_7_TENANCY.md) for the corporate / multi-tenant deltas.
+**V2 (current `main`, V2.1)** adds five planes on top: observability (OTel + Loki + Grafana), self-learning loop (lessons memory + Hermes Curator + periodic nudges), **event log + Iris Curator with the GitOps split fully landed** (V2.1: wrappers no longer create per-action `iris-self/*` branches; the curator bundles dirty manifest paths into one PR per cadence — ms-latency wrappers, one review per day instead of N), multi-profile fleet (persona / researcher / coder / ops, opt-in), and an append-only audit log Postgres for compliance. See [V2_INSTALL.md](V2_INSTALL.md) for the full architecture spec, [PHASE_5_SANDBOX.md](PHASE_5_SANDBOX.md) for the sandbox-runtime decision tree, and [PHASE_7_TENANCY.md](PHASE_7_TENANCY.md) for the corporate / multi-tenant deltas.
 
 ## What you get
 
@@ -189,23 +189,33 @@ LiteLLM dashboard at http://127.0.0.1:4000/ui (login with `LITELLM_MASTER_KEY` f
 
 Honest scope: the Claude Code sidecar can read arbitrary files in `/workspace`, and the public Claude Code hook API doesn't permit content masking before Anthropic sees it. Workspace hygiene is the primary defense — don't put secrets in `~/iris-workspace`.
 
-## Letting Iris evolve itself (optional)
+## Letting Iris evolve itself (V2.1 workflow)
 
-Iris has read+write access to her own repo at `/repo` inside the container, and can commit changes to `iris-self/*` or `iris-proposed/*` branches with auto-enforced guardrails (no secrets, no personal data, no touching infra files, no push). To enable this, install the pre-commit + commit-msg hooks once after cloning:
+Iris has read+write access to her own repo at `/repo` and can run her four wrappers freely. The flow:
+
+1. **Iris fires wrappers** (`iris-learn`, `iris-cron`, `iris-skill`, `iris-mcp`) — runtime change happens immediately, manifest in `/repo` becomes dirty, event log row gets written. **No git commits, no branches.** ms-latency.
+2. **Curator bundles** — once a day (via the `iris.nightly-curator-distill` cron) or on demand:
+   ```bash
+   make iris-curator-pr           # writes distill markdown + creates one curator branch with all dirty manifests
+   ```
+3. **You review one PR** — the curator branch has all manifest changes from the lookback window plus the distill markdown as the commit body.
+4. **Merge if it looks right** — `git push origin <curator-branch>` + `gh pr create`, or `git merge --ff-only` if you trust the diff.
+
+For deliberate persona / rules edits (not wrapper-driven), Iris still uses the V1 workflow — `iris-proposed/<topic>` branch + commit. Those go through:
+
+```bash
+make iris-review     # see pending iris-proposed/* and iris-self/* branches
+make iris-push       # publish them to GitHub
+make iris-clean      # destructive: delete all iris-* branches (typing DELETE)
+```
+
+Both workflows enforce the same guardrails: pre-commit secret/PII scan, commit-msg policy (no `iris-*:` commits to protected paths). Install the hooks once:
 
 ```bash
 bash scripts/install-iris-hooks.sh
 ```
 
-Then your daily workflow when Iris proposes changes:
-
-```bash
-make iris-review     # see all pending iris-self/* and iris-proposed/* branches with diffs
-make iris-push       # publish them to GitHub for review (you merge via PR)
-make iris-clean      # destructive: delete all iris-* branches (after typing DELETE)
-```
-
-Push to `main` stays human-only. Full setup walkthrough in [INSTALL.md Phase I](INSTALL.md).
+Push to `main` stays human-only. Full walkthrough in [V2_INSTALL.md §6](V2_INSTALL.md).
 
 ## Customizing Claude Code sidecar config
 

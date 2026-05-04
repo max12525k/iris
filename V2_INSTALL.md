@@ -638,14 +638,15 @@ def emit(category, action, subject=None, outcome="ok", payload=None,
 
 ### 3.3 Wrappers route through event log; remove per-action git commits
 
-Refactor each wrapper:
+Refactor each wrapper (this is what V2.1 actually ships):
 
-| V1 behavior | V2 behavior |
+| V1 / V2.0 behavior | V2.1 behavior |
 |---|---|
-| Every action → branch + commit on iris-self/* | Every action → event log row |
-| Stash dance to preserve user state | None needed — no branch switch |
-| Reconcile triggered immediately | Deferred by default; `--now` for opt-in immediate |
-| Manifest write at action time | Deferred — manifest written by Curator at batch time |
+| Every action → branch + commit on iris-self/* | Every action → manifest write in-place + event log row |
+| Stash dance to preserve user state | None needed — no branch switch, working tree dirty is fine |
+| Reconcile triggered immediately | Reconcile still immediate (so the action takes effect now) |
+| Manifest write at action time, committed on iris-self/* | Manifest write at action time, NOT committed (curator bundles) |
+| 1 PR per action (review noise) | 1 PR per cadence (curator-distill bundle) |
 
 The wrappers shrink dramatically. `iris-learn` becomes:
 
