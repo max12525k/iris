@@ -1,4 +1,6 @@
-# Iris Agent Stack — Install Guide
+# Iris Agent Stack — Install Guide (V1)
+
+> **V2 IS LIVE ON `main`.** This document is the V1 install — the substrate V2 builds on. For the current architecture (observability, lessons memory, event log, multi-profile fleet, audit log Postgres, Mission Control via Grafana), read **[V2_INSTALL.md](V2_INSTALL.md)** instead. Every V1 phase below still applies; V2 adds five cross-cutting planes on top without replacing any V1 component.
 
 **For most users: read [README.md](./README.md) first.** It has an 8-command quickstart that handles the common path.
 

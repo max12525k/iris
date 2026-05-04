@@ -2,20 +2,25 @@
 
 A self-hosted, privacy-routed AI assistant built on [NousResearch/hermes-agent](https://github.com/NousResearch/hermes-agent). Brain runs on Kimi K2.6 via [LiteLLM](https://github.com/BerriAI/litellm) over OpenRouter; can delegate coding tasks to Claude Code (your Claude Max plan) via a sidecar; falls back to local Ollama for sensitive prompts. Persistent memory via [Honcho](https://github.com/plastic-labs/honcho). Every cloud call passes through [Presidio](https://github.com/microsoft/presidio) PII guardrails.
 
+**V2 (current `main`)** adds five planes on top: observability (OTel + Loki + Grafana), self-learning loop (lessons memory + Hermes Curator + periodic nudges), event log + Iris Curator (GitOps split — fast autonomous observation, slow reviewed intent), multi-profile fleet (persona / researcher / coder / ops, opt-in), and an append-only audit log Postgres for compliance. See [V2_INSTALL.md](V2_INSTALL.md) for the full architecture spec, [PHASE_5_SANDBOX.md](PHASE_5_SANDBOX.md) for the sandbox-runtime decision tree, and [PHASE_7_TENANCY.md](PHASE_7_TENANCY.md) for the corporate / multi-tenant deltas.
+
 ## What you get
 
 | Service | Purpose | Reach via |
 |---|---|---|
-| `iris-dashboard` | Hermes web UI | http://127.0.0.1:9119 |
+| `iris-dashboard` | Hermes web UI (chat tab, sessions, skills) | http://127.0.0.1:9119 |
 | `litellm` | LLM proxy + virtual keys + audit + Presidio guardrails | http://127.0.0.1:4000 |
-| `prometheus` | Metrics scrape of LiteLLM | http://127.0.0.1:9090 |
+| `grafana` | **Mission Control** — fleet overview, agent detail, compliance dashboards (V2) | http://127.0.0.1:3000 |
+| `prometheus` | Metrics scrape (LiteLLM + OTel collector + Hermes /metrics) | http://127.0.0.1:9090 |
 | `iris-gateway` | Hermes runtime (messaging adapters, cron, brain) | internal |
 | `claude-cli` | Claude Code sidecar — uses your Claude Max plan via OAuth | internal, called via wrapper |
-| `honcho-api` + `honcho-deriver` | Semantic memory (pgvector + redis) | internal |
-| `presidio-analyzer` + `presidio-anonymizer` | PII detection & masking | internal |
+| `honcho-api` + `honcho-deriver` | Semantic memory + dialectic user model (pgvector + redis) | internal |
+| `presidio-analyzer` + `presidio-anonymizer` | PII detection & masking before any cloud call | internal |
+| `otel-collector` + `loki` + `promtail` | V2 telemetry plane: traces, logs, span aggregation | internal |
+| `audit-db` | V2 append-only Postgres for SOC2/HIPAA-grade audit trail | internal |
 | `litellm-db`, `honcho-db`, `honcho-redis` | Persistence | internal |
 
-12 containers total. Three Docker bridge networks: `frontend` (host loopback), `backend` (internal), `data` (internal). No internal services exposed to the host or LAN.
+**17 containers default + 3 opt-in profile gateways** (`iris-researcher`, `iris-coder`, `iris-ops` — bring up via `docker compose --profile fleet up -d`). Three Docker bridge networks: `frontend` (host loopback), `backend` (internal), `data` (internal). Internal services are not exposed to the host or LAN.
 
 ## Prerequisites
 
@@ -83,6 +88,36 @@ To customize Iris's persona, edit `iris/iris-config/SOUL.md` and re-run `mint-ir
 
 **Optional next step — messaging bots:** to talk to Iris from Telegram or Discord (instead of just the web dashboard), see [INSTALL.md Phase G.13](INSTALL.md). Add tokens to `.env`, recreate iris-gateway, you have a personal assistant in your messaging client of choice.
 
+## V2 capabilities at a glance
+
+Iris's wrappers (V1 + V2) — what she can do without manual help:
+
+| Wrapper | Effect | Manifest |
+|---|---|---|
+| `iris-learn <eco> <pkg>` | Install package now + commit to manifest for fresh-clone reproducibility | `iris/iris-learned/{apt,python,npm}.txt` |
+| `iris-cron add\|rm\|list` | Schedule a recurring job; survives recreate + fresh-clone | `iris/iris-config/cron.yaml` |
+| `iris-skill install\|uninstall\|list` | Install a Hermes skill from registries; snapshot persisted | `iris/iris-config/skills.json` |
+| `iris-mcp add\|rm\|list` | Connect/disconnect an MCP server; replayed at boot | `iris/iris-config/mcp.yaml` |
+| `iris-curator [--since 24h] [--tenant X]` | Distill the event log into a markdown summary for review | `iris-curator-pending/distill-*.md` |
+| `_record_lesson` | Auto-called on wrapper failures; lessons surface as a Hermes user-message skill next session | `/opt/data/iris-lessons.jsonl` |
+| `_event_log` / `_audit_emit` | Every wrapper action lands in `iris-events.db` (operational SQLite) and `audit_log` Postgres (compliance) | both |
+
+Hermes-native features wired up in V2:
+- **Curator** runs nightly via `iris.nightly-curator` cron — archives stale skills, consolidates duplicates
+- **Periodic skill-creation nudge** every 15 tool calls (Hermes prompts Iris to consider saving a skill)
+- **Memory-save nudge** every 10 user turns (Hermes prompts Iris to persist to Honcho)
+- **Honcho dialectic** — wrapper failures land here as conclusions when an embedding key is configured
+
+## Mission Control (Grafana dashboards)
+
+http://127.0.0.1:3000 — three pre-provisioned dashboards in the "Iris V2" folder:
+
+- **Fleet Overview** (`iris-v2-fleet-overview`) — wrapper rate, failure rate, recent events, LiteLLM throughput
+- **Compliance & Audit** (`iris-v2-compliance-access`) — backed by audit-db; SOC2/HIPAA-shaped queries
+- **Agent Detail** (`iris-v2-agent-detail`) — drill into one profile via the `$profile` selector
+
+Anonymous Viewer is enabled for read-only access; `admin` / `admin` for editing. Datasources auto-provisioned: Prometheus, Loki, AuditDB.
+
 ## How to actually talk to Iris
 
 Three surfaces, all sharing the same brain + memory + guardrails:
@@ -108,16 +143,22 @@ Useful slash commands once you're chatting:
 ## Day-to-day ops
 
 ```bash
-make dev          # start (build if needed)
+make dev          # start (build if needed) — 17 containers
 make down         # stop (volumes preserved)
 make logs SERVICE=iris-gateway   # tail one service
-make ps           # status of all 12 containers
-make backup       # one-shot manual backup (schedule it via cron / systemd timer / launchd — see INSTALL.md G.3)
+make ps           # status of all containers
+make backup       # one-shot manual backup (schedule via cron / systemd timer / launchd — see INSTALL.md G.3)
 make rebuild      # rebuild Iris + Honcho images after upstream pulls
 make pull         # update remote images (litellm, postgres, prometheus, etc.)
+
+# V2 multi-profile fleet (opt-in):
+docker compose --profile researcher up -d   # bring up researcher gateway
+docker compose --profile coder      up -d   # bring up coder gateway
+docker compose --profile ops        up -d   # bring up ops gateway
+docker compose --profile fleet      up -d   # bring up all three
 ```
 
-Backups go to `./backups/<date>/` — three artifacts (litellm.sql.gz, honcho.sql.gz, iris_data.tar.gz). 7-day rotation.
+Backups go to `./backups/<date>/` — three artifacts (litellm.sql.gz, honcho.sql.gz, iris_data.tar.gz). 7-day rotation. The audit log Postgres is included via `make backup-v2` (Phase 6.x).
 
 ## Cost expectations
 
@@ -190,9 +231,16 @@ make prod    # uses compose.prod.yaml: cap_drop ALL, no-new-privileges, read_onl
 
 For a cloud VPS, you'd also want to swap the host-loopback `ports:` bindings (`127.0.0.1:9119`, etc.) for a reverse proxy (Caddy / Traefik) with proper auth in front.
 
+For corporate / multi-tenant deployment (OIDC, RBAC, Vault, per-tenant pgvector, K8s manifests), the architectural deltas are documented in [PHASE_7_TENANCY.md](PHASE_7_TENANCY.md) — that's a 1-2 month platform build, sequenced as 8 migration steps. Don't reach for it until you actually need it (PHASE_7 lays out the "when to actually do this" criteria).
+
+For per-task sandbox isolation (failed installs cannot break the gateway, blast radius limited to one execution), see [PHASE_5_SANDBOX.md](PHASE_5_SANDBOX.md) — the decision tree (firejail / Daytona / E2B / K8s Agent Sandbox) depends on threat model and infra.
+
 ## Want to know more
 
-`INSTALL.md` is the full reproducible install — every decision, every gotcha, every troubleshooting case. Read it if a step in this README didn't work, or if you want to understand the architecture in depth.
+- **[V2_INSTALL.md](V2_INSTALL.md)** — the full V2 architecture spec (5 planes, 7 phases) with file layouts, env vars, network topology, and the V1→V2 migration runbook. Start here if a step in this README didn't work, or if you want to understand what each container does in depth.
+- **[PHASE_5_SANDBOX.md](PHASE_5_SANDBOX.md)** — sandbox runtime decision tree + dispatcher API surface.
+- **[PHASE_7_TENANCY.md](PHASE_7_TENANCY.md)** — corporate / multi-tenant reference architecture.
+- **[INSTALL.md](INSTALL.md)** — the V1 install guide; still accurate for the V1 substrate that V2 builds on.
 
 ## License
 

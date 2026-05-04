@@ -1,6 +1,18 @@
 # Iris V2 — Install & Architecture Guide
 
-> **Status (2026-05-03):** This document is half spec, half install guide. The architecture is settled; the implementation lands in seven phases. Each phase below states which parts are already in V1 vs which are net-new for V2. Read top-to-bottom on the first pass; come back to specific phases when implementing.
+> **Status (2026-05-04):** Phases 1-4 + 6 are SHIPPED on `main`. Phases 5 and 7 are documented but their full implementation is operator-dependent (sandbox runtime choice, OIDC/Vault provisioning) — see [PHASE_5_SANDBOX.md](PHASE_5_SANDBOX.md) and [PHASE_7_TENANCY.md](PHASE_7_TENANCY.md) for the decision trees. Mission Control is provided via three Grafana dashboards (fleet overview, agent detail, compliance & audit) instead of a separate UI.
+
+| Phase | Scope | Status |
+|---|---|---|
+| 1 | Observability (OTel + Loki + Grafana + Prom) | SHIPPED |
+| 2 | Self-learning loop (lessons memory + Hermes Curator + nudges) | SHIPPED |
+| 3 | Event log + iris-curator (intent/observation split) | SHIPPED |
+| 4 | Multi-profile fleet (persona, researcher, coder, ops) | SHIPPED |
+| 5 | Sandbox dispatch | DOC — operator picks runtime |
+| 6 | Audit log Postgres + Grafana compliance dashboards | SHIPPED |
+| 7 | Multi-tenant (OIDC, RBAC, Vault, pgvector namespacing) | DOC — corporate-only |
+
+Read top-to-bottom on the first pass; come back to specific phases when implementing.
 
 V1 (current `main`) treated git as the substrate for every learned action — every package install, every cron schedule, every MCP server became a branch + commit + human review. That worked while the agent was passive. Once Iris started exercising her capabilities autonomously, the GitHub flow collapsed under its own friction: 20 branches a day, 5+ wrapper bugs from `set -e` + bash + git stash interactions, 40-minute autonomous runs with no failure memory. V2 splits the architecture into five planes that each address a specific failure mode of V1, and unifies every existing component under a single observability layer.
 
