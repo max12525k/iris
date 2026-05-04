@@ -23,10 +23,14 @@ model:
 
 # Reasoning effort default. Applies generically across providers (Anthropic
 # extended thinking, OpenAI o-series, Kimi K2.x reasoning, etc.).
-# "low" = sensible default for routine work; user can escalate at runtime
+# "medium" = correct dispatcher tier — the orchestrator routes work to
+# subagents that carry their own task-appropriate reasoning configs (a
+# researcher subagent might be xhigh; a classifier might be low). Spending
+# top-tier reasoning on the dispatcher itself is wasted; under-powering it
+# below `medium` causes mis-routing. User can still escalate at runtime
 # with `/reasoning high` (or "xhigh" for max). Effort tiers:
 #   none, minimal, low, medium, high, xhigh
-reasoning_effort: low
+reasoning_effort: medium
 
 # Lazy skill loading — biggest single token-overhead cut. Hermes ships 89
 # bundled skills; eager mode injects all 89 names+descriptions into every
