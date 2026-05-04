@@ -33,3 +33,24 @@ datasources:
           matcherRegex: 'trace_id["=:]+([a-f0-9]+)'
           name: trace_id
           url: '$${__value.raw}'
+
+  # V2 Phase 6 — append-only audit log Postgres. Read-only role (audit_reader)
+  # so a compromised Grafana session cannot mutate compliance records.
+  # Password is interpolated from the AUDIT_READER_PASSWORD env var on the
+  # grafana container.
+  - name: AuditDB
+    type: postgres
+    access: proxy
+    url: audit-db:5432
+    user: audit_reader
+    secureJsonData:
+      password: ${AUDIT_READER_PASSWORD}
+    jsonData:
+      database: audit
+      sslmode: disable
+      postgresVersion: 1600
+      timescaledb: false
+      maxOpenConns: 10
+      maxIdleConns: 2
+      connMaxLifetime: 14400
+    editable: false

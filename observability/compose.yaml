@@ -68,6 +68,9 @@ services:
       GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
       # Auto-load datasources + dashboards from /etc/grafana/provisioning.
       GF_PATHS_PROVISIONING: /etc/grafana/provisioning
+      # Phase 6 audit log datasource needs the audit_reader password so the
+      # provisioning file can interpolate it into the Postgres connection.
+      AUDIT_READER_PASSWORD: ${AUDIT_READER_PASSWORD}
     volumes:
       - grafana_data:/var/lib/grafana
       - ./grafana/provisioning:/etc/grafana/provisioning:ro

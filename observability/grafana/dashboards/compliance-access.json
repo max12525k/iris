@@ -1,0 +1,270 @@
+{
+  "annotations": { "list": [] },
+  "description": "Iris V2 — compliance & audit. Backed by audit-db Postgres (audit_log table). Use this for SOC2/HIPAA-shaped questions: who accessed what, when, how did it end. Append-only — UPDATEs and DELETEs are blocked at the database level.",
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 0,
+  "panels": [
+    {
+      "datasource": { "type": "postgres", "uid": "AuditDB" },
+      "description": "Total audit-log rows in the selected window. If this is zero, either no activity occurred or the audit emitter isn't wired in.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "blue", "value": null },
+              { "color": "green", "value": 1 }
+            ]
+          },
+          "unit": "short"
+        }
+      },
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 0 },
+      "id": 1,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": ["lastNotNull"],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "datasource": { "type": "postgres", "uid": "AuditDB" },
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT NOW() AS time, COUNT(*) AS total FROM audit_log WHERE ts >= $__timeFrom() AND ts <= $__timeTo()",
+          "refId": "A"
+        }
+      ],
+      "title": "Total audit events (window)",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "postgres", "uid": "AuditDB" },
+      "description": "Non-ok outcomes — anything denied, errored, or timed out.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 1 },
+              { "color": "red", "value": 10 }
+            ]
+          }
+        }
+      },
+      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 0 },
+      "id": 2,
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "auto",
+        "graphMode": "area"
+      },
+      "targets": [
+        {
+          "datasource": { "type": "postgres", "uid": "AuditDB" },
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT NOW() AS time, COUNT(*) AS total FROM audit_log WHERE outcome != 'ok' AND ts >= $__timeFrom() AND ts <= $__timeTo()",
+          "refId": "A"
+        }
+      ],
+      "title": "Failed/denied events",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "postgres", "uid": "AuditDB" },
+      "description": "Events flagged as PII-redacted by Presidio. High counts indicate users frequently sending PII; consider tightening upstream input.",
+      "fieldConfig": {
+        "defaults": { "color": { "mode": "thresholds" } }
+      },
+      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 0 },
+      "id": 3,
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "auto",
+        "graphMode": "area"
+      },
+      "targets": [
+        {
+          "datasource": { "type": "postgres", "uid": "AuditDB" },
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT NOW() AS time, COUNT(*) AS total FROM audit_log WHERE pii_redacted = TRUE AND ts >= $__timeFrom() AND ts <= $__timeTo()",
+          "refId": "A"
+        }
+      ],
+      "title": "PII redactions",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "postgres", "uid": "AuditDB" },
+      "description": "Distinct actors active in the window.",
+      "fieldConfig": { "defaults": { "color": { "mode": "thresholds" } } },
+      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 0 },
+      "id": 4,
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "auto",
+        "graphMode": "area"
+      },
+      "targets": [
+        {
+          "datasource": { "type": "postgres", "uid": "AuditDB" },
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT NOW() AS time, COUNT(DISTINCT actor_id) AS total FROM audit_log WHERE ts >= $__timeFrom() AND ts <= $__timeTo()",
+          "refId": "A"
+        }
+      ],
+      "title": "Distinct actors",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "postgres", "uid": "AuditDB" },
+      "description": "Activity rate over time, broken down by action verb.",
+      "fieldConfig": {
+        "defaults": {
+          "custom": { "drawStyle": "bars", "fillOpacity": 50, "lineWidth": 1 },
+          "color": { "mode": "palette-classic" }
+        }
+      },
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 4 },
+      "id": 5,
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "postgres", "uid": "AuditDB" },
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT $__timeGroup(ts, $__interval) AS time, action AS metric, COUNT(*) AS value FROM audit_log WHERE ts >= $__timeFrom() AND ts <= $__timeTo() GROUP BY 1, 2 ORDER BY 1",
+          "refId": "A"
+        }
+      ],
+      "title": "Audit events per action over time",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "postgres", "uid": "AuditDB" },
+      "description": "Top actors by volume in the window. For SOC2 reviews, look for unexpected actors or sudden spikes.",
+      "fieldConfig": {
+        "defaults": {
+          "custom": { "align": "auto", "displayMode": "auto" },
+          "color": { "mode": "palette-classic" }
+        }
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 12 },
+      "id": 6,
+      "options": {
+        "showHeader": true,
+        "footer": { "show": false }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "postgres", "uid": "AuditDB" },
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT actor_id AS \"actor\", actor_type AS \"type\", profile, COUNT(*) AS events, COUNT(*) FILTER (WHERE outcome != 'ok') AS errors FROM audit_log WHERE ts >= $__timeFrom() AND ts <= $__timeTo() GROUP BY 1, 2, 3 ORDER BY events DESC LIMIT 20",
+          "refId": "A"
+        }
+      ],
+      "title": "Top actors (window)",
+      "type": "table"
+    },
+    {
+      "datasource": { "type": "postgres", "uid": "AuditDB" },
+      "description": "Failure breakdown by resource_type. Recurring failures on a specific resource are good candidates for hardening.",
+      "fieldConfig": {
+        "defaults": {
+          "custom": { "align": "auto" },
+          "color": { "mode": "palette-classic" }
+        }
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 12 },
+      "id": 7,
+      "options": { "showHeader": true },
+      "targets": [
+        {
+          "datasource": { "type": "postgres", "uid": "AuditDB" },
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT resource_type, outcome, COUNT(*) AS count FROM audit_log WHERE outcome != 'ok' AND ts >= $__timeFrom() AND ts <= $__timeTo() GROUP BY 1, 2 ORDER BY count DESC LIMIT 20",
+          "refId": "A"
+        }
+      ],
+      "title": "Failures by resource type",
+      "type": "table"
+    },
+    {
+      "datasource": { "type": "postgres", "uid": "AuditDB" },
+      "description": "Last 100 audit events. The full audit trail surface — filter by anything via the SQL query inspector.",
+      "fieldConfig": {
+        "defaults": {
+          "custom": { "align": "auto", "filterable": true },
+          "color": { "mode": "thresholds" }
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "outcome" },
+            "properties": [
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-text"
+                }
+              },
+              {
+                "id": "mappings",
+                "value": [
+                  { "type": "value", "options": { "ok":      { "color": "green" } } },
+                  { "type": "value", "options": { "denied":  { "color": "yellow" } } },
+                  { "type": "value", "options": { "error":   { "color": "red" } } },
+                  { "type": "value", "options": { "timeout": { "color": "orange" } } }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "gridPos": { "h": 16, "w": 24, "x": 0, "y": 20 },
+      "id": 8,
+      "options": { "showHeader": true, "footer": { "show": false } },
+      "targets": [
+        {
+          "datasource": { "type": "postgres", "uid": "AuditDB" },
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT ts, profile, tenant, actor_type AS \"actor type\", actor_id AS actor, action, resource_type AS \"resource type\", resource_id AS resource, outcome, pii_redacted AS \"pii\" FROM audit_log WHERE ts >= $__timeFrom() AND ts <= $__timeTo() ORDER BY ts DESC LIMIT 100",
+          "refId": "A"
+        }
+      ],
+      "title": "Recent audit events (sortable, filterable)",
+      "type": "table"
+    }
+  ],
+  "refresh": "30s",
+  "schemaVersion": 39,
+  "tags": ["iris", "v2", "compliance", "audit"],
+  "templating": { "list": [] },
+  "time": { "from": "now-7d", "to": "now" },
+  "timepicker": {},
+  "timezone": "",
+  "title": "Iris V2 — Compliance & Audit",
+  "uid": "iris-v2-compliance-access",
+  "version": 1,
+  "weekStart": ""
+}

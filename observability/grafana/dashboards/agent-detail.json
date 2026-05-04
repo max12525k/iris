@@ -1,0 +1,211 @@
+{
+  "annotations": { "list": [] },
+  "description": "Iris V2 — drill into one agent profile. Use the profile selector at the top to filter every panel. Backed by the operational event log (read via the audit-db Postgres mirror — Phase 6.x will add direct SQLite access).",
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 0,
+  "panels": [
+    {
+      "datasource": { "type": "postgres", "uid": "AuditDB" },
+      "description": "Total events for the selected profile in the time window.",
+      "fieldConfig": {
+        "defaults": { "color": { "mode": "thresholds" } }
+      },
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 0 },
+      "id": 1,
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "auto",
+        "graphMode": "area"
+      },
+      "targets": [
+        {
+          "datasource": { "type": "postgres", "uid": "AuditDB" },
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT NOW() AS time, COUNT(*) AS total FROM audit_log WHERE profile = '$profile' AND ts >= $__timeFrom() AND ts <= $__timeTo()",
+          "refId": "A"
+        }
+      ],
+      "title": "Events for $profile",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "postgres", "uid": "AuditDB" },
+      "description": "Outcome breakdown. Anything red means failures need investigation.",
+      "fieldConfig": {
+        "defaults": { "color": { "mode": "palette-classic" } }
+      },
+      "gridPos": { "h": 4, "w": 12, "x": 6, "y": 0 },
+      "id": 2,
+      "options": {
+        "displayMode": "gradient",
+        "orientation": "horizontal",
+        "showUnfilled": true,
+        "valueMode": "color"
+      },
+      "targets": [
+        {
+          "datasource": { "type": "postgres", "uid": "AuditDB" },
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT outcome, COUNT(*) AS count FROM audit_log WHERE profile = '$profile' AND ts >= $__timeFrom() AND ts <= $__timeTo() GROUP BY outcome ORDER BY count DESC",
+          "refId": "A"
+        }
+      ],
+      "title": "Outcomes for $profile",
+      "type": "bargauge"
+    },
+    {
+      "datasource": { "type": "postgres", "uid": "AuditDB" },
+      "description": "Distinct resources (skills, tools, mcp servers) this profile touched.",
+      "fieldConfig": { "defaults": { "color": { "mode": "thresholds" } } },
+      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 0 },
+      "id": 3,
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "auto",
+        "graphMode": "area"
+      },
+      "targets": [
+        {
+          "datasource": { "type": "postgres", "uid": "AuditDB" },
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT NOW() AS time, COUNT(DISTINCT resource_id) AS total FROM audit_log WHERE profile = '$profile' AND ts >= $__timeFrom() AND ts <= $__timeTo()",
+          "refId": "A"
+        }
+      ],
+      "title": "Distinct resources",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "postgres", "uid": "AuditDB" },
+      "description": "Activity over time, broken down by action verb. Spikes indicate burst work; flat regions indicate idle profile.",
+      "fieldConfig": {
+        "defaults": {
+          "custom": { "drawStyle": "bars", "fillOpacity": 50, "lineWidth": 1 },
+          "color": { "mode": "palette-classic" }
+        }
+      },
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 4 },
+      "id": 4,
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "postgres", "uid": "AuditDB" },
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT $__timeGroup(ts, $__interval) AS time, action AS metric, COUNT(*) AS value FROM audit_log WHERE profile = '$profile' AND ts >= $__timeFrom() AND ts <= $__timeTo() GROUP BY 1, 2 ORDER BY 1",
+          "refId": "A"
+        }
+      ],
+      "title": "$profile — actions over time",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "postgres", "uid": "AuditDB" },
+      "description": "Top resources this profile interacted with. Use this to spot which skills/tools/MCP servers are pulling weight (and which aren't).",
+      "fieldConfig": {
+        "defaults": {
+          "custom": { "align": "auto" },
+          "color": { "mode": "palette-classic" }
+        }
+      },
+      "gridPos": { "h": 10, "w": 12, "x": 0, "y": 12 },
+      "id": 5,
+      "options": { "showHeader": true },
+      "targets": [
+        {
+          "datasource": { "type": "postgres", "uid": "AuditDB" },
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT resource_type AS type, resource_id AS resource, COUNT(*) AS events, COUNT(*) FILTER (WHERE outcome = 'ok') AS ok, COUNT(*) FILTER (WHERE outcome != 'ok') AS errors FROM audit_log WHERE profile = '$profile' AND ts >= $__timeFrom() AND ts <= $__timeTo() GROUP BY 1, 2 ORDER BY events DESC LIMIT 30",
+          "refId": "A"
+        }
+      ],
+      "title": "Top resources for $profile",
+      "type": "table"
+    },
+    {
+      "datasource": { "type": "loki", "uid": "loki" },
+      "description": "Profile-tagged spans + log lines from OTel + Promtail. Filtered to this profile only.",
+      "gridPos": { "h": 10, "w": 12, "x": 12, "y": 12 },
+      "id": 6,
+      "options": {
+        "dedupStrategy": "none",
+        "enableLogDetails": true,
+        "showCommonLabels": false,
+        "showLabels": true,
+        "showTime": true,
+        "sortOrder": "Descending",
+        "wrapLogMessage": true
+      },
+      "targets": [
+        {
+          "datasource": { "type": "loki", "uid": "loki" },
+          "expr": "{container=\"otel-collector\"} |~ \"profile.*$profile\"",
+          "queryType": "range",
+          "refId": "A"
+        }
+      ],
+      "title": "$profile — recent telemetry (Loki)",
+      "type": "logs"
+    },
+    {
+      "datasource": { "type": "postgres", "uid": "AuditDB" },
+      "description": "Recent failures. If a pattern emerges (same resource_id repeatedly failing), that's a candidate for the iris-lessons skill or a guardrail.",
+      "fieldConfig": {
+        "defaults": { "custom": { "align": "auto", "filterable": true } }
+      },
+      "gridPos": { "h": 10, "w": 24, "x": 0, "y": 22 },
+      "id": 7,
+      "options": { "showHeader": true },
+      "targets": [
+        {
+          "datasource": { "type": "postgres", "uid": "AuditDB" },
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT ts, action, resource_type AS \"resource type\", resource_id AS resource, outcome, payload->>'error_class' AS \"error class\" FROM audit_log WHERE profile = '$profile' AND outcome != 'ok' AND ts >= $__timeFrom() AND ts <= $__timeTo() ORDER BY ts DESC LIMIT 50",
+          "refId": "A"
+        }
+      ],
+      "title": "$profile — recent failures",
+      "type": "table"
+    }
+  ],
+  "refresh": "30s",
+  "schemaVersion": 39,
+  "tags": ["iris", "v2", "agent"],
+  "templating": {
+    "list": [
+      {
+        "current": { "selected": false, "text": "default", "value": "default" },
+        "datasource": { "type": "postgres", "uid": "AuditDB" },
+        "definition": "SELECT DISTINCT profile FROM audit_log ORDER BY profile",
+        "hide": 0,
+        "includeAll": false,
+        "label": "profile",
+        "multi": false,
+        "name": "profile",
+        "options": [],
+        "query": "SELECT DISTINCT profile FROM audit_log ORDER BY profile",
+        "refresh": 2,
+        "regex": "",
+        "skipUrlSync": false,
+        "sort": 1,
+        "type": "query"
+      }
+    ]
+  },
+  "time": { "from": "now-7d", "to": "now" },
+  "timepicker": {},
+  "timezone": "",
+  "title": "Iris V2 — Agent Detail",
+  "uid": "iris-v2-agent-detail",
+  "version": 1,
+  "weekStart": ""
+}
