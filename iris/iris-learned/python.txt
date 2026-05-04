@@ -2,3 +2,4 @@
 # pip requirements format — version pins and comments OK.
 # Installed into Hermes's venv at /opt/hermes/.venv.
 pyfiglet
+tomli
