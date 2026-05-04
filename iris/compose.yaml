@@ -22,6 +22,29 @@ services:
       # iris-authored commits on main or touching protected paths. Iris commits
       # to iris-proposed/* branches; user reviews + pushes via PR.
       - ${IRIS_REPO:-${HOME}/personal_assistant/iris}:/repo:rw
+      # Personal layer (host ~/.claude/, read-only). Lets Hermes share voice,
+      # rules, and memory with host Claude Code from one source of truth.
+      # Policy: ~/.claude/rules/iris-boundary.md. Classification: ~/.claude/MANIFEST.md.
+      #
+      # NEVER ADD MOUNTS HERE WITHOUT REVIEWING MANIFEST.md TIER FIRST.
+      # Forbidden (would leak — these tiers must never be mounted):
+      #   - any path classified `confidential` or `secret` in MANIFEST.md
+      #   - ${HOME}/.claude/projects/*/<UUID>/   (raw session transcripts)
+      #   - ${HOME}/.claude/hooks/, agents/, plans/, sessions/, cache/
+      #   - ${HOME}/.claude/settings*.json       (operational state, may carry tokens)
+      #
+      # Per-business context subtrees and the user-level auto-memory path
+      # (which contains the host username slug in its directory name) are NOT
+      # mounted here — they're personally-bound and would leak into commit
+      # diffs. They get added via a per-machine override (.env-driven mount,
+      # gitignored) in a separate change. The five mounts below are the
+      # generic foundation: behavioral baseline, classification source of
+      # truth, rules, skills, and a single canonical voice file.
+      - ${HOME}/.claude/CLAUDE.md:/iris/claude/CLAUDE.md:ro
+      - ${HOME}/.claude/MANIFEST.md:/iris/claude/MANIFEST.md:ro
+      - ${HOME}/.claude/rules:/iris/claude/rules:ro
+      - ${HOME}/.claude/skills:/iris/claude/skills:ro
+      - ${HOME}/.claude/context/personal/voice.md:/iris/claude/context/voice.md:ro
     environment:
       HERMES_UID: ${HERMES_UID:-10000}
       HERMES_GID: ${HERMES_GID:-10000}

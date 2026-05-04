@@ -5,6 +5,9 @@
 #   1. Common API key / secret patterns in any staged content
 #   2. Personal identifiers (gmail/yahoo/outlook/icloud emails;
 #      absolute /Users/<name> paths revealing host username)
+#   3. Vocabulary deny-list from ${HOME}/.claude/security/commit-deny-vocab.txt
+#      (business/project names, codenames, user identifiers — see that file
+#      for format). Skipped silently if the file is absent (clean clones).
 #
 # Iris-author / branch / protected-path policy lives in the commit-msg hook,
 # not here — pre-commit hook can't read the new commit message reliably
@@ -85,6 +88,25 @@ for FILE in $FILES; do
         ERRORS=$((ERRORS + 1))
     fi
 done
+
+# Vocabulary deny-list scan — terms the user has flagged as "must not appear
+# in any commit on this repo" (business names, codenames, identifiers).
+# File lives outside any repo so it isn't itself committed.
+VOCAB_FILE="${HOME}/.claude/security/commit-deny-vocab.txt"
+if [ -f "$VOCAB_FILE" ]; then
+    VOCAB_RX=$(grep -vE '^[[:space:]]*(#|$)' "$VOCAB_FILE" | tr '\n' '|' | sed 's/|$//')
+    if [ -n "$VOCAB_RX" ]; then
+        for FILE in $FILES; do
+            [ -f "$FILE" ] || continue
+            if grep -niE "$VOCAB_RX" "$FILE" >/dev/null 2>&1; then
+                LINE=$(grep -niE "$VOCAB_RX" "$FILE" | head -1 | cut -d: -f1)
+                TERM=$(grep -niE "$VOCAB_RX" "$FILE" | head -1 | grep -oiE "$VOCAB_RX" | head -1)
+                echo "✗ $FILE:$LINE — vocabulary deny-list match ('$TERM')"
+                ERRORS=$((ERRORS + 1))
+            fi
+        done
+    fi
+fi
 
 if [ "$ERRORS" -gt 0 ]; then
     echo ""
