@@ -65,16 +65,30 @@ memory:
 prompt_caching:
   cache_ttl: "1h"
 
-# Conversation compression — fires when prompt tokens hit 50% of context window.
+# Conversation compression — fires when prompt tokens hit 25% of context window.
+# Lower threshold vs default 50% = earlier compression = cheaper sessions,
+# especially in Telegram where long tool-heavy turns accumulate fast.
 # Tighter target_ratio (0.10 vs default 0.20) means smaller post-compression
 # context = lower ongoing per-call cost, at the price of more aggressive
 # summarization. Worth it for long-running sessions where each compressed turn
 # is multiplied across all subsequent turns.
 compression:
   enabled: true
-  threshold: 0.50         # fraction of context window before compression triggers
+  threshold: 0.25         # fraction of context window before compression triggers
   target_ratio: 0.10      # tail budget — tighter = cheaper continuation
-  protect_last_n: 20      # always preserve the last N messages verbatim
+  protect_last_n: 10      # preserve last 10 messages (was 20; Telegram churn is high)
+
+# V2 Plane 4 — Telegram-specific session reset policy.
+# DMs on Telegram accumulate context fast due to tool call churn.
+# Default global policy is 24h idle / daily @ 4am. Telegram DMs override
+# to a tighter idle timeout so costs don't compound across the day.
+session_reset:
+  reset_by_platform:
+    telegram:
+      mode: "idle"
+      idle_minutes: 45        # Reset after 45 min of inactivity in Telegram DMs
+      notify: true            # Tell user when reset happens
+  # You can also set reset_by_type (dm, group, thread) here later.
 
 # Auxiliary model routing — community-validated cost optimization.
 # Every aux task defaults to "main" (Kimi K2.6, $0.74/$3.49) which is wasteful
